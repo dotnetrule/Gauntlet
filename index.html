@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gauntlet</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #eee;
+  font-family: 'Courier New', monospace;
+  overflow: hidden; user-select: none;
+  display: flex; flex-direction: column; height: 100vh;
+}
+
+/* ── TOP BAR ── */
+#top-bar {
+  display: flex; justify-content: space-between; align-items: center;
+  background: #0f0f23; padding: 6px 16px; border-bottom: 2px solid #333;
+  font-size: 13px; min-height: 42px; flex-shrink: 0;
+}
+.player-hud { display: flex; gap: 14px; align-items: center; }
+.hud-stat   { display: flex; flex-direction: column; align-items: center; line-height: 1.2; }
+.hud-label  { font-size: 9px; color: #888; text-transform: uppercase; }
+.hud-val    { font-size: 15px; font-weight: bold; }
+
+/* ── GAME CANVAS AREA ── */
+#game-area {
+  flex: 1; overflow: hidden; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+#game-area canvas { display: block; }
+
+/* ── BOTTOM BAR ── */
+#bottom-bar {
+  background: #0f0f23; border-top: 2px solid #333;
+  padding: 8px 12px; display: flex; gap: 8px;
+  align-items: center; flex-wrap: wrap;
+  min-height: 80px; flex-shrink: 0;
+}
+.section-label { font-size: 10px; color: #666; margin-right: 2px; white-space: nowrap; }
+.divider       { width: 1px; background: #333; align-self: stretch; margin: 0 4px; }
+
+/* Buttons */
+.btn { border: none; cursor: pointer; border-radius: 4px; font-family: inherit; transition: all 0.1s; }
+.tower-btn {
+  background: #2a2a4a; border: 2px solid #444; color: #eee;
+  padding: 4px 8px; font-size: 11px; min-width: 72px;
+}
+.tower-btn:hover    { border-color: #aaa; background: #3a3a6a; }
+.tower-btn.selected { border-color: #ffd700; background: #3a3a2a; }
+.tower-btn .tb-name { font-weight: bold; font-size: 12px; }
+.tower-btn .tb-cost { color: #ffd700; font-size: 10px; }
+.tower-btn .tb-desc { color: #aaa; font-size: 9px; }
+
+.send-btn {
+  background: #3a1a1a; border: 2px solid #884; color: #ffa;
+  padding: 4px 8px; font-size: 11px; min-width: 80px;
+}
+.send-btn:hover { border-color: #ff8; background: #5a2a2a; }
+.send-btn .sb-name { font-weight: bold; font-size: 12px; }
+.send-btn .sb-cost { color: #ffd700; font-size: 10px; }
+.send-btn .sb-hp   { color: #88ff88; font-size: 9px; }
+
+#sell-btn {
+  background: #1a3a1a; border: 2px solid #484; color: #8f8;
+  padding: 4px 10px; font-size: 11px; cursor: pointer; border-radius: 4px;
+}
+#sell-btn:hover { background: #2a5a2a; }
+
+#speed-btn {
+  background: #2a2a4a; border: 2px solid #444; color: #eee;
+  padding: 4px 10px; font-size: 12px; cursor: pointer;
+  border-radius: 4px; font-family: inherit;
+}
+#speed-btn:hover { border-color: #aaa; }
+
+/* ── TOOLTIP ── */
+#tooltip {
+  position: fixed; background: #111; border: 1px solid #555;
+  padding: 6px 10px; font-size: 11px; pointer-events: none;
+  display: none; z-index: 100; border-radius: 4px; max-width: 220px;
+  white-space: pre-line;
+}
+
+/* ── GAME OVER OVERLAY ── */
+#overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+  display: none; flex-direction: column; align-items: center;
+  justify-content: center; z-index: 200; gap: 16px;
+}
+#overlay h1    { font-size: 52px; color: #ffd700; text-shadow: 0 0 24px #ffd700; }
+#overlay p     { font-size: 18px; color: #aaa; }
+#restart-btn   {
+  background: #ffd700; color: #000; border: none; padding: 12px 36px;
+  font-size: 18px; font-family: inherit; cursor: pointer;
+  border-radius: 6px; font-weight: bold; margin-top: 8px;
+}
+#restart-btn:hover { background: #ffec6e; }
+</style>
+</head>
+<body>
+
+<!-- ── TOP BAR ── -->
+<div id="top-bar">
+  <div class="player-hud">
+    <div class="hud-stat"><span class="hud-label">Gold</span>  <span class="hud-val" id="gold-val"   style="color:#ffd700">200</span></div>
+    <div class="hud-stat"><span class="hud-label">Income</span><span class="hud-val" id="income-val" style="color:#90ee90">10/w</span></div>
+    <div class="hud-stat"><span class="hud-label">Lives</span> <span class="hud-val" id="lives-val"  style="color:#ff6b6b">20</span></div>
+    <div class="hud-stat"><span class="hud-label">Kills</span> <span class="hud-val" id="kills-val"  style="color:#88ccff">0</span></div>
+  </div>
+  <div id="wave-info" style="text-align:center">
+    <div style="font-size:10px;color:#888">NEXT WAVE</div>
+    <div id="wave-timer" style="font-size:20px;font-weight:bold;color:#fff">25</div>
+    <div id="wave-label" style="font-size:11px;color:#aaa">Wave 1</div>
+  </div>
+  <div class="player-hud" style="justify-content:flex-end">
+    <div class="hud-stat"><span class="hud-label">AI Kills</span><span class="hud-val" id="ai-kills-val" style="color:#88ccff">0</span></div>
+    <div class="hud-stat"><span class="hud-label">AI Lives</span><span class="hud-val" id="ai-lives-val" style="color:#ff6b6b">20</span></div>
+    <div class="hud-stat"><span class="hud-label">AI Gold</span> <span class="hud-val" id="ai-gold-val"  style="color:#ffd700">200</span></div>
+  </div>
+</div>
+
+<!-- ── PHASER CANVAS ── -->
+<div id="game-area"></div>
+
+<!-- ── BOTTOM BAR ── -->
+<div id="bottom-bar">
+  <span class="section-label">TOWERS</span>
+  <div id="tower-btns" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  <div class="divider"></div>
+  <span class="section-label">SEND</span>
+  <div id="send-btns" style="display:flex;gap:6px;flex-wrap:wrap"></div>
+  <div class="divider"></div>
+  <button id="sell-btn"  class="btn">Sell (50%)</button>
+  <button id="speed-btn" class="btn">Speed: 1x</button>
+</div>
+
+<!-- ── GAME OVER OVERLAY ── -->
+<div id="tooltip"></div>
+<div id="overlay">
+  <h1 id="overlay-title"></h1>
+  <p  id="overlay-msg"></p>
+  <button id="restart-btn">Play Again</button>
+</div>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
