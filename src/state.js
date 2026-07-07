@@ -1,4 +1,5 @@
 import { makeGrid, computePath } from './systems/pathfinding.js';
+import { makeAIState } from './systems/ai.js';
 import {
   BOARD_W, GUTTER,
   INCOME_INTERVAL, START_INCOME, START_GOLD,
@@ -18,7 +19,7 @@ export const gameState = {
   gameSpeed:     1,
   selectedTower: null,   // { tower, p } | null
   placingTower:  null,   // TowerDef    | null
-  aiState:       null,   // { buildTimer, sendTimer }
+  aiState:       null,   // see makeAIState() in systems/ai.js
   scene:         null,   // Phaser.Scene — set by GameScene.create()
 };
 
@@ -56,7 +57,7 @@ export function initGame() {
   gameState.gameSpeed     = 1;
   gameState.selectedTower = null;
   gameState.placingTower  = null;
-  gameState.aiState       = { buildTimer: 8, sendTimer: 15 };
+  gameState.aiState       = makeAIState();
 }
 
 // ─── Floating text ────────────────────────────────────────────────────────────

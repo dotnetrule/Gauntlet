@@ -3,50 +3,182 @@ import { TOWERS } from '../config/towers.js';
 import { SEND_UNITS } from '../config/units.js';
 import { placeTower } from '../entities/tower.js';
 import { sendUnit } from './waves.js';
-import { ROWS, COLS, BOARD_W } from '../config/constants.js';
+import { ROWS, COLS, BOARD_W, INCOME_INTERVAL } from '../config/constants.js';
+
+// ─── Tuning knobs ─────────────────────────────────────────────────────────────
+const DECIDE_INTERVAL      = 2;     // seconds between AI decisions
+const GOLD_RESERVE         = 120;   // eco mode keeps this much banked
+const DEFEND_LIVES_LOST    = 2;     // lives lost within DEFEND_WINDOW → defend
+const DEFEND_WINDOW        = 10;    // seconds
+const DEFEND_CREEP_COUNT   = 12;    // creeps in lane → defend
+const PRESSURE_INCOME_RATIO = 1.25; // ai income vs player income → pressure
+const PRESSURE_PLAYER_LIVES = 8;    // player at/below this → pressure
+const FORCE_SEND_AFTER     = 45;    // seconds without a send → force one
+const FORCE_SEND_MIN_GOLD  = 200;
+const ECO_BUILD_INTERVAL   = INCOME_INTERVAL * 3; // ~1 tower per 3 income ticks
+
+export function makeAIState() {
+  return {
+    decideTimer:  DECIDE_INTERVAL,
+    elapsed:      0,
+    lastSendAt:   0,
+    buildTimer:   ECO_BUILD_INTERVAL / 2, // first eco tower arrives early
+    prevLives:    20,
+    lifeLossLog:  [],   // timestamps of recent life losses
+    mode:         'eco',
+  };
+}
 
 /**
- * Tick the AI — called every frame.
- * The AI has two behaviours on cooldowns:
- *   1. Build towers randomly in valid cells.
- *   2. Send units to the player's lane.
+ * Tick the AI — called every frame, acts every DECIDE_INTERVAL seconds.
+ * Three modes:
+ *   eco      (default) — bank a reserve, dump surplus into the largest send
+ *   defend   — bleeding lives or swamped: build maze towers on the path
+ *   pressure — income lead or wounded player: all-in Boss/Jugger + Swarm
  */
 export function updateAI(dt) {
   const { ai, player } = gameState;
   const s = gameState.aiState;
 
+  s.elapsed    += dt;
   s.buildTimer -= dt;
-  s.sendTimer  -= dt;
 
-  // ── Build ──────────────────────────────────────────────────────────────────
-  if (s.buildTimer <= 0) {
-    s.buildTimer = 4 + Math.random() * 5;
+  // Track recent life losses for the defend trigger
+  if (ai.lives < s.prevLives) {
+    for (let i = 0; i < s.prevLives - ai.lives; i++) s.lifeLossLog.push(s.elapsed);
+    s.prevLives = ai.lives;
+  }
+  s.lifeLossLog = s.lifeLossLog.filter(t => s.elapsed - t < DEFEND_WINDOW);
 
-    const affordable = Object.values(TOWERS).filter(t => t.cost <= ai.gold * 0.7);
-    if (affordable.length) {
-      const def = affordable[Math.floor(Math.random() * affordable.length)];
-      for (let attempt = 0; attempt < 25; attempt++) {
-        const row = Math.floor(Math.random() * ROWS);
-        const col = 1 + Math.floor(Math.random() * (COLS - 2));
-        if (placeTower(ai, row, col, def)) break;
-      }
-    }
+  s.decideTimer -= dt;
+  if (s.decideTimer > 0) return;
+  s.decideTimer = DECIDE_INTERVAL;
+
+  s.mode = _pickMode(ai, player, s);
+
+  switch (s.mode) {
+    case 'defend':   _actDefend(ai);            break;
+    case 'pressure': _actPressure(ai, player, s); break;
+    default:         _actEco(ai, player, s);
   }
 
-  // ── Send ───────────────────────────────────────────────────────────────────
-  if (s.sendTimer <= 0) {
-    s.sendTimer = 18 + Math.random() * 10;
+  // Anti-emptiness guard: never go silent for too long
+  if (s.elapsed - s.lastSendAt > FORCE_SEND_AFTER && ai.gold > FORCE_SEND_MIN_GOLD) {
+    const def = _largestAffordableSend(ai.gold);
+    if (def) _doSend(ai, player, s, def);
+  }
+}
 
-    const affordable = Object.values(SEND_UNITS).filter(
-      u => u.cost <= ai.gold * 0.5 && gameState.waveNum >= u.unlockWave
-    );
-    if (affordable.length) {
-      const def = affordable[Math.floor(Math.random() * affordable.length)];
-      if (ai.gold >= def.cost) {
-        ai.gold -= def.cost;
-        sendUnit(ai, player, def, def.count ?? 1);
-        addFloat(ai, ai.offsetX + BOARD_W / 2, 55, `Sent ${def.name}!`, '#ffa0a0');
-      }
+// ─── Mode selection ───────────────────────────────────────────────────────────
+
+function _pickMode(ai, player, s) {
+  if (s.lifeLossLog.length >= DEFEND_LIVES_LOST || ai.creeps.length > DEFEND_CREEP_COUNT)
+    return 'defend';
+  if (ai.income >= player.income * PRESSURE_INCOME_RATIO || player.lives <= PRESSURE_PLAYER_LIVES)
+    return 'pressure';
+  return 'eco';
+}
+
+// ─── Behaviours ───────────────────────────────────────────────────────────────
+
+/** Bank GOLD_RESERVE, spend the surplus on the largest send, build occasionally. */
+function _actEco(ai, player, s) {
+  const def = _largestAffordableSend(ai.gold - GOLD_RESERVE);
+  if (def) _doSend(ai, player, s, def);
+
+  if (s.buildTimer <= 0 && _buildTower(ai)) {
+    s.buildTimer = ECO_BUILD_INTERVAL;
+  }
+}
+
+/** Bleeding — spend on maze towers along the current path. */
+function _actDefend(ai) {
+  // Up to two towers per decision while gold allows
+  for (let i = 0; i < 2; i++) {
+    if (!_buildTower(ai)) break;
+  }
+}
+
+/** Income lead or wounded player — dump gold into big-plus-fast combos. */
+function _actPressure(ai, player, s) {
+  const { boss, juggernaut, swarm } = SEND_UNITS;
+
+  const big = _isUnlocked(juggernaut) && ai.gold >= juggernaut.cost ? juggernaut
+            : _isUnlocked(boss)       && ai.gold >= boss.cost       ? boss
+            : null;
+  if (big) _doSend(ai, player, s, big);
+
+  // Chase the big send with swarms while gold remains
+  while (_isUnlocked(swarm) && ai.gold >= swarm.cost) {
+    _doSend(ai, player, s, swarm);
+  }
+
+  // Nothing big affordable yet? Fall back to the largest send available.
+  if (!big) {
+    const def = _largestAffordableSend(ai.gold);
+    if (def) _doSend(ai, player, s, def);
+  }
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function _isUnlocked(def) {
+  return gameState.waveNum >= def.unlockWave;
+}
+
+function _largestAffordableSend(budget) {
+  return Object.values(SEND_UNITS)
+    .filter(u => _isUnlocked(u) && u.cost <= budget)
+    .sort((a, b) => b.cost - a.cost)[0] ?? null;
+}
+
+function _doSend(ai, player, s, def) {
+  ai.gold -= def.cost;
+  sendUnit(ai, player, def, def.count ?? 1);
+  s.lastSendAt = s.elapsed;
+  addFloat(ai, ai.offsetX + BOARD_W / 2, 55, `Sent ${def.name}!`, '#ffa0a0');
+}
+
+/**
+ * Place one tower on a cell adjacent to the AI's current creep path —
+ * real maze-lengthening rather than random scatter. Returns success.
+ */
+function _buildTower(ai) {
+  const affordable = Object.values(TOWERS).filter(t => t.cost <= ai.gold);
+  if (!affordable.length) return false;
+  // Prefer the most expensive tower it can afford
+  const def = affordable.sort((a, b) => b.cost - a.cost)[0];
+
+  const candidates = _pathAdjacentCells(ai);
+  for (const [row, col] of candidates) {
+    if (placeTower(ai, row, col, def)) return true;
+  }
+  // Fallback: random valid cell
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const row = Math.floor(Math.random() * ROWS);
+    const col = 1 + Math.floor(Math.random() * (COLS - 2));
+    if (placeTower(ai, row, col, def)) return true;
+  }
+  return false;
+}
+
+/** Shuffled list of empty cells 4-adjacent to the AI's current path. */
+function _pathAdjacentCells(ai) {
+  const seen = new Set();
+  const out  = [];
+  for (const [r, c] of ai.path ?? []) {
+    for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nr = r + dr, nc = c + dc;
+      const key = nr * COLS + nc;
+      if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS || seen.has(key)) continue;
+      seen.add(key);
+      if (ai.grid[nr][nc] === 0) out.push([nr, nc]);
     }
   }
+  // Fisher–Yates shuffle so mazes vary game to game
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
