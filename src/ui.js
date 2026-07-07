@@ -5,7 +5,7 @@
 import { gameState, addFloat } from './state.js';
 import { TOWERS }     from './config/towers.js';
 import { SEND_UNITS } from './config/units.js';
-import { sellTower }  from './entities/tower.js';
+import { sellTower, upgradeTower } from './entities/tower.js';
 import { sendUnit }   from './systems/waves.js';
 import { BOARD_W }    from './config/constants.js';
 
@@ -13,6 +13,7 @@ export function setupUI(phaserGame) {
   _buildTowerButtons();
   _buildSendButtons();
   _buildSellButton();
+  _buildUpgradeButton();
   _buildSpeedButton();
   _buildRestartButton(phaserGame);
   _buildTooltip();
@@ -32,10 +33,12 @@ function _buildTowerButtons() {
       <div class="tb-desc">${def.desc}</div>`;
     btn.title = [
       `${def.name} — ${def.desc}`,
-      `Cost: ${def.cost}g | Sell: ${def.sell}g`,
+      `Cost: ${def.cost}g | Sell: 50% of invested`,
       `Range: ${def.range} tiles | Dmg: ${def.damage} | Rate: ${def.rate}/s`,
       def.slow   ? `Slow: ${(def.slow * 100).toFixed(0)}%` : '',
       def.splash  ? `Splash radius: ${def.splash} tiles`   : '',
+      def.chain   ? `Chains to ${def.chain} creeps`        : '',
+      def.upgrades ? `Upgrades: ${def.upgrades.map(u => `${u.cost}g`).join(' → ')}` : '',
       '',
       'Click grid to place. Shift+click to keep placing.',
     ].filter(Boolean).join('\n');
@@ -64,26 +67,31 @@ function _buildSendButtons() {
   Object.values(SEND_UNITS).forEach(def => {
     const btn = document.createElement('button');
     btn.className = 'btn send-btn';
+    btn.dataset.unlock = def.unlockWave;
     btn.innerHTML = `
       <div class="sb-name">${def.name}</div>
       <div class="sb-cost">💰${def.cost}</div>
+      <div class="sb-income">+${def.incomeBonus} income</div>
       <div class="sb-hp">❤️${def.hp}${def.count ? ` ×${def.count}` : ''}</div>`;
     btn.title = [
       `Send ${def.name} into the opponent's lane`,
       def.desc,
       `Cost: ${def.cost}g | HP: ${def.hp} | Speed: ${def.speed}`,
+      `Permanently raises YOUR income by ${def.incomeBonus}`,
       def.count ? `Sends ${def.count} units at once` : '',
+      def.unlockWave > 1 ? `Unlocks at wave ${def.unlockWave}` : '',
     ].filter(Boolean).join('\n');
 
     btn.addEventListener('click', () => {
       if (!gameState.player || gameState.gameOver) return;
+      if (gameState.waveNum < def.unlockWave) return;
       if (gameState.player.gold < def.cost) {
         addFloat(gameState.player, BOARD_W / 2, 60, 'Not enough gold!', '#ff4444');
         return;
       }
       gameState.player.gold -= def.cost;
-      sendUnit(gameState.ai, def, def.count ?? 1);
-      addFloat(gameState.player, BOARD_W / 2, 40, `Sent ${def.name}!`, '#ffa0a0');
+      sendUnit(gameState.player, gameState.ai, def, def.count ?? 1);
+      addFloat(gameState.player, BOARD_W / 2, 48, `Sent ${def.name}!`, '#ffa0a0');
     });
 
     container.appendChild(btn);
@@ -97,6 +105,16 @@ function _buildSellButton() {
     if (sel && sel.p === gameState.player) {
       sellTower(gameState.player, sel.tower);
       gameState.selectedTower = null;
+    }
+  });
+}
+
+// ─── Upgrade button ───────────────────────────────────────────────────────────
+function _buildUpgradeButton() {
+  document.getElementById('upgrade-btn').addEventListener('click', () => {
+    const sel = gameState.selectedTower;
+    if (sel && sel.p === gameState.player) {
+      upgradeTower(gameState.player, sel.tower);
     }
   });
 }

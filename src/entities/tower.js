@@ -1,6 +1,8 @@
 import { gameState } from '../state.js';
 import { astar, computePath } from '../systems/pathfinding.js';
 import { dealDamage } from './combat.js';
+import { sfx } from '../systems/sfx.js';
+import { burst } from '../systems/particles.js';
 import { COLS, CELL, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL } from '../config/constants.js';
 
 // ─── Placement ────────────────────────────────────────────────────────────────
@@ -25,19 +27,45 @@ export function placeTower(p, row, col, def) {
   if (!canPlace(p, row, col) || p.gold < def.cost) return false;
   p.gold          -= def.cost;
   p.grid[row][col] = 1;
-  p.towers.push({ row, col, def, cooldown: 0 });
+  p.towers.push({ row, col, def, tier: 0, invested: def.cost, cooldown: 0, flash: 0 });
   p.path = computePath(p.grid);
   p.creeps.forEach(c => rerouteCreep(p, c));
+  sfx('place');
   return true;
 }
 
-/** Remove a tower and refund 50% of its cost. */
+/** Effective stats for a tower at its current tier. */
+export function towerStats(t) {
+  return t.tier === 0 ? t.def : { ...t.def, ...t.def.upgrades[t.tier - 1] };
+}
+
+/** Next tier's upgrade def, or null at max tier. */
+export function nextUpgrade(t) {
+  return t.def.upgrades?.[t.tier] ?? null;
+}
+
+/** Upgrade a tower to its next tier. Returns false if maxed or unaffordable. */
+export function upgradeTower(p, t) {
+  const up = nextUpgrade(t);
+  if (!up || p.gold < up.cost) return false;
+  p.gold     -= up.cost;
+  t.tier     += 1;
+  t.invested += up.cost;
+  const cx = p.offsetX + t.col * CELL + CELL / 2;
+  const cy = t.row * CELL + CELL / 2;
+  burst(p, cx, cy, 0xffd700, 12, { speed: 70, life: 0.5 });
+  sfx('upgrade');
+  return true;
+}
+
+/** Remove a tower and refund 50% of everything invested in it. */
 export function sellTower(p, tower) {
-  p.gold              += tower.def.sell;
+  p.gold              += Math.floor(tower.invested * 0.5);
   p.grid[tower.row][tower.col] = 0;
   p.towers             = p.towers.filter(t => t !== tower);
   p.path               = computePath(p.grid);
   p.creeps.forEach(c => rerouteCreep(p, c));
+  sfx('sell');
 }
 
 // ─── Per-frame update ─────────────────────────────────────────────────────────
@@ -45,9 +73,11 @@ export function sellTower(p, tower) {
 /** Fire at the furthest-along creep in range, respecting cooldown. */
 export function updateTower(p, t, dt) {
   t.cooldown = Math.max(0, t.cooldown - dt);
+  t.flash    = Math.max(0, t.flash - dt);
   if (t.cooldown > 0) return;
 
-  const rng = t.def.range * CELL;
+  const stats = towerStats(t);
+  const rng = stats.range * CELL;
   const tx  = p.offsetX + t.col * CELL + CELL / 2;
   const ty  = t.row * CELL + CELL / 2;
 
@@ -59,25 +89,50 @@ export function updateTower(p, t, dt) {
   }
   if (!best) return;
 
-  t.cooldown = 1 / t.def.rate;
+  t.cooldown = 1 / stats.rate;
+  t.flash    = 0.07;
+  sfx(`shot_${t.def.id}`);
 
-  if (t.def.splash > 0) {
+  if (stats.chain > 0) {
+    // Chain lightning — hit the primary plus its nearest neighbours
+    const targets = _chainTargets(p, best, stats.chain);
+    const pts = [[tx, ty]];
+    for (const c of targets) {
+      dealDamage(p, c, stats.damage, stats.slow);
+      pts.push([c.x, c.y]);
+    }
+    p.projectiles.push({
+      chainPts: pts, life: 0.15,
+      cn: stats.cn, done: false, instant: true,
+    });
+  } else if (stats.splash > 0) {
     // Projectile that explodes on arrival
     p.projectiles.push({
       x: tx, y: ty, tx: best.x, ty: best.y,
-      speed: 280, splash: t.def.splash * CELL,
-      damage: t.def.damage, slow: t.def.slow,
-      cn: t.def.cn, done: false,
+      speed: 280, splash: stats.splash * CELL,
+      damage: stats.damage, slow: stats.slow,
+      cn: stats.cn, done: false,
     });
   } else {
     // Instant hit — fire a visual-only tracer
-    dealDamage(p, best, t.def.damage, t.def.slow);
+    dealDamage(p, best, stats.damage, stats.slow);
     p.projectiles.push({
       x: tx, y: ty, tx: best.x, ty: best.y,
       speed: 450, splash: 0, damage: 0, slow: 0,
-      cn: t.def.cn, done: false, instant: true,
+      cn: stats.cn, done: false, instant: true,
     });
   }
+}
+
+/** Primary target plus up to (chain-1) nearest living creeps within 2 tiles. */
+function _chainTargets(p, primary, chain) {
+  const near = p.creeps
+    .filter(c => c !== primary && c.hp > 0 &&
+                 Math.hypot(c.x - primary.x, c.y - primary.y) <= 2 * CELL)
+    .sort((a, b) =>
+      Math.hypot(a.x - primary.x, a.y - primary.y) -
+      Math.hypot(b.x - primary.x, b.y - primary.y));
+  return [primary, ...near.slice(0, chain - 1)];
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

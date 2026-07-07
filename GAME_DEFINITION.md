@@ -7,24 +7,24 @@
 **Platform target:** Browser-first; extensible to desktop and multiplayer
 **Perspective:** Top-down 2D grid
 
-A 1v1 competitive tower defense where each player builds a maze on their own lane to kill incoming creep waves. Players also spend gold to actively send attack units into the opponent's lane. The game ends when one player loses all their lives.
+A 1v1 competitive tower defense where each player builds a maze on their own lane and spends gold to send attack units into the opponent's lane. **Sending is the economy**: every unit sent permanently raises your income, so each gold piece is a gamble between defending now and getting richer through aggression — the core tension of the original Wintermaul Wars. The game ends when one player loses all their lives.
 
 ---
 
 ## 2. Core Loop
 
 ```
-Wave Timer Ticks Down
+Income pays out every 15 seconds
        ↓
-Both lanes receive creep wave simultaneously
+Players spend gold: towers/upgrades (defense) OR sends (offense + eco)
        ↓
-Players place/upgrade towers to kill creeps (maze building)
+Every send PERMANENTLY raises the sender's income
        ↓
-Killed creeps reward gold
+Sent units walk the opponent's maze — leaks cost lives
        ↓
-Players spend gold on more towers OR send units to opponent
+Baseline creep waves drip bounty gold to both lanes
        ↓
-Sent units walk the opponent's lane — if they leak, opponent loses lives
+Richer player snowballs → bigger sends → more pressure
        ↓
 Repeat until one player hits 0 lives → that player loses
 ```
@@ -46,106 +46,119 @@ Repeat until one player hits 0 lives → that player loses
 | Source | Amount |
 |---|---|
 | Starting gold | 200 |
-| Per creep killed | Creep's `reward` value (4–50g) |
-| Income per wave | 10g + 2g per 5 kills accumulated |
+| Starting income | 15 per tick |
+| Income tick | Every 15 seconds |
+| Per creep killed | Creep's `reward` value (bounty only — kills do NOT raise income) |
+| Per unit sent | Permanent `+incomeBonus` to the **sender's** income |
 
-Income scales with kill count, rewarding aggressive maze play over time.
+Income only grows by sending. Payback on a send is roughly 9–13 income ticks, and bigger sends are slightly more income-efficient — saving up for a large send is the greedy eco play, but it leaves you poor while the opponent pressures you.
 
 ---
 
 ## 5. Towers
 
-| Name | Cost | Role | Key Stat |
-|---|---|---|---|
-| Arrow | 50g | Single-target DPS | Fast rate, medium range |
-| Cannon | 120g | AoE burst | Splash radius, slower rate |
-| Frost | 90g | Utility / slow | 45% slow, 2s duration |
-| Sniper | 200g | Long-range snipe | 7 tile range, high damage |
-| Flame | 160g | Rapid AoE | 3 attacks/sec, short range |
+| Name | Cost | Upgrades (T2 / T3) | Role | Key stat progression |
+|---|---|---|---|---|
+| Arrow | 50g | 75g / 150g | Single-target DPS | 12→30→75 dmg, rate up to 1.6/s |
+| Frost | 90g | 135g / 260g | Utility / slow | 45%→55%→65% slow |
+| Cannon | 120g | 180g / 350g | AoE burst | 60→150→360 dmg, splash to 1.8 tiles |
+| Flame | 160g | 240g / 480g | Rapid AoE | 20→50→120 dmg at 3/s |
+| Sniper | 200g | 300g / 600g | Long-range snipe | 120→300→750 dmg, 8-tile range |
+| Lightning | 240g | 360g / 700g | Chain damage | 45→110→260 dmg, chains 3→4→5 creeps |
 
 **Tower rules:**
 - Placement blocked by maze validity check (A*)
-- Selected towers can be sold for 50% of cost
+- Each tower has two upgrade tiers with better damage-per-gold than the base — upgrading beats spamming when maze tiles are scarce
+- Selling refunds **50% of everything invested** (base + upgrades)
 - Towers target the furthest-along creep in range
+- Upgraded towers grow visually and gain tier pips
 
 ---
 
-## 6. Creep Waves (PvE component)
+## 6. Baseline Creep Waves (bounty drip)
 
-Waves spawn every ~25 seconds. Wave creep type and count scale with wave number:
+Small waves spawn every ~30 seconds on both lanes. They exist to drip bounty gold and keep mazes visibly working — the real pressure comes from opponent sends. Tiers cap at Ogre; the top-tier monsters only ever arrive as sends.
 
-| Tier | Name | HP range | Reward |
+| Tier | Name | Base HP | Reward |
 |---|---|---|---|
-| 1 | Footman | 80–scaling | 4g |
-| 2 | Grunt | 200–scaling | 8g |
-| 3 | Ogre | 500–scaling | 15g |
-| 4 | Troll | 1200–scaling | 25g |
-| 5 | Demon | 3000–scaling | 50g |
+| 1 | Footman | 80 | 3g |
+| 2 | Grunt | 220 | 5g |
+| 3 | Ogre | 550 | 8g |
 
-HP scales by +15% per wave within each tier. Count grows with wave number.
+Tier advances every 4 waves (capped). HP scales +12% per wave; count grows slowly (`4 + wave/4`).
 
 ---
 
-## 7. Send Units (PvP Component)
+## 7. Send Units (the PvP + eco engine)
 
-Players spend gold to send units directly into the **opponent's lane**:
+Players spend gold to send units into the **opponent's lane**. Every send permanently raises the **sender's** income.
 
-| Unit | Cost | HP | Speed | Special |
-|---|---|---|---|---|
-| Runner | 60g | 200 | Fast | Cheap harassment |
-| Brute | 120g | 700 | Slow | Tanky |
-| Swarm | 100g | 150×5 | Medium | Sends 5 at once |
-| Boss | 350g | 4000 | Very slow | High-value threat |
+| Unit | Cost | HP | Count | +Income | Unlocks |
+|---|---|---|---|---|---|
+| Runner | 50g | 250 | 1 | +4 | Wave 1 |
+| Swarm | 110g | 130 | ×6 | +10 | Wave 2 |
+| Brute | 150g | 1100 | 1 | +14 | Wave 4 |
+| Boss | 400g | 4500 | 1 | +42 | Wave 8 |
+| Juggernaut | 900g | 12000 | 1 | +110 | Wave 13 |
 
-Sent units walk the opponent's maze path. Each one that reaches the exit deals **1 life** of damage.
+Sent units walk the opponent's maze path. Each one that reaches the exit deals **1 life** of damage. Unlock waves prevent early boss rushes.
 
 ---
 
 ## 8. Lives & Winning
 
 - Both players start with **20 lives**
-- Lives are lost when:
-  - A wave creep leaks through your maze (−1 life)
-  - A sent unit reaches the exit of your lane (−1 life per unit)
+- Lives are lost when any creep — baseline wave or sent unit — leaks through the maze (−1 life each)
 - **Win condition:** Reduce opponent to 0 lives
 
 ---
 
-## 9. Wave Send Timing
+## 9. Timing
 
-- Wave creeps spawn on a fixed timer (every 25s)
-- Sent units can be dispatched **at any time** between waves (real-time economy decision)
-- This creates the core tension: do you save gold to improve your maze, or spend it to pressure the opponent?
-
----
-
-## 10. AI Opponent (v1)
-
-The current AI:
-- Attempts to place a tower every 4–9 seconds in a random valid cell
-- Prioritizes affordable towers (spends up to 70% of gold on each build)
-- Sends a random affordable unit every 18–28 seconds
-
-Future AI improvements: difficulty levels, strategic maze-building heuristics, threat detection.
+- Income pays every **15 seconds** (both players simultaneously)
+- Baseline waves spawn every **30 seconds**
+- Sends can be dispatched **at any time** — the core real-time decision is *defend now vs. eco harder*
 
 ---
 
-## 11. Planned / Future Systems
+## 10. AI Opponent
 
-- **Tower upgrades** (tiered upgrade paths per tower)
-- **Visual polish** (particles, hit effects, animated creeps)
+The AI runs a 2-second decision tick with three modes:
+
+- **Eco** (default): banks a small gold reserve, dumps surplus into the largest unlocked send, builds/upgrades a tower every few income ticks
+- **Defend**: triggered by losing 2+ lives in 10s or a swamped lane; builds maze towers adjacent to its actual creep path and upgrades the tower covering the most path
+- **Pressure**: triggered by a 25% income lead or a wounded player; dumps gold into Boss/Juggernaut + Swarm combos
+
+A watchdog forces a send if the AI has been quiet for 45 seconds. All thresholds are named constants in `src/systems/ai.js` for tuning.
+
+---
+
+## 11. Presentation
+
+All audio and visuals are procedural — no external assets:
+
+- WebAudio synth effects: per-tower shot voices, hit ticks, death zaps, leak alarm, send sweep, upgrade arpeggio, income ding, wave horn, win/lose stingers
+- Particle bursts on kills, leaks, cannon impacts, and upgrades
+- Creep hit flashes, walk wobble, and facing nubs; tower muzzle flashes
+- Screen shake when the player loses a life; HUD gold pulse on the income tick
+
+---
+
+## 12. Planned / Future Systems
+
 - **Local 2-player** (split keyboard controls)
 - **Online multiplayer** (WebSocket or WebRTC)
-- **More tower types** (chain lightning, mortar, buff auras)
+- **More tower types** (mortar, buff auras)
 - **More send units** (invisible, armored, regenerating)
+- **AI difficulty levels**
 - **Lobby & matchmaking**
 - **Leaderboard / stats**
 
 ---
 
-## 12. Key Design Pillars
+## 13. Key Design Pillars
 
-1. **Maze agency** — Path length is entirely player-driven; great maces are the primary skill expression
-2. **Economy tension** — Every gold is a choice: build vs. attack
-3. **Simultaneous pressure** — Both players race the same wave timer, creating shared urgency
-4. **Readable state** — Both lanes visible at all times so players can read the match at a glance
+1. **Eco vs. defense gamble** — Income only grows by sending; every gold piece is a bet between safety now and wealth later
+2. **Maze agency** — Path length is entirely player-driven; great mazes are the primary skill expression
+3. **Player-driven pressure** — The dangerous creeps on your lane were sent by your opponent, not a timer
+4. **Readable state** — Both lanes and both incomes visible at all times so players can read the eco race at a glance

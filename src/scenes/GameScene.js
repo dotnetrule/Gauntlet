@@ -5,11 +5,16 @@ import {
   GUTTER, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL,
 } from '../config/constants.js';
 import { gameState, initGame, updateFloats } from '../state.js';
-import { canPlace, placeTower, sellTower, updateTower } from '../entities/tower.js';
+import {
+  canPlace, placeTower, sellTower, updateTower,
+  towerStats, nextUpgrade,
+} from '../entities/tower.js';
 import { updateCreep } from '../entities/creep.js';
 import { updateProjectile } from '../entities/projectile.js';
-import { startWave, processSpawnQueue } from '../systems/waves.js';
+import { startWave, payIncome, processSpawnQueue } from '../systems/waves.js';
 import { updateAI } from '../systems/ai.js';
+import { updateParticles } from '../systems/particles.js';
+import { sfx } from '../systems/sfx.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -111,6 +116,9 @@ export class GameScene extends Phaser.Scene {
     gameState.waveTimer -= dt;
     if (gameState.waveTimer <= 0) startWave();
 
+    gameState.incomeTimer -= dt;
+    if (gameState.incomeTimer <= 0) payIncome();
+
     processSpawnQueue(gameState.player, dt);
     processSpawnQueue(gameState.ai, dt);
     updateAI(dt);
@@ -119,10 +127,26 @@ export class GameScene extends Phaser.Scene {
       p.towers.forEach(t  => updateTower(p, t, dt));
       p.creeps.filter(c => c.hp > 0).forEach(c => updateCreep(p, c, dt));
       p.projectiles.forEach(pr => updateProjectile(p, pr, dt));
+      updateParticles(p, dt);
       updateFloats(p, dt);
 
       p.creeps      = p.creeps.filter(c  => c.hp > 0);
       p.projectiles = p.projectiles.filter(pr => !pr.done);
+    }
+
+    // Consume one-shot feedback flags set by entity modules
+    if (gameState.shake) {
+      this.cameras.main.shake(150, 0.004);
+      gameState.shake = false;
+    }
+    if (gameState.incomePulse) {
+      gameState.incomePulse = false;
+      for (const id of ['gold-val', 'income-val']) {
+        const el = _el(id);
+        el.classList.remove('pulse');
+        void el.offsetWidth;   // restart the CSS animation
+        el.classList.add('pulse');
+      }
     }
   }
 
@@ -132,6 +156,7 @@ export class GameScene extends Phaser.Scene {
 
     gameState.gameOver = true;
     const win = ai.lives <= 0;
+    sfx(win ? 'win' : 'lose');
 
     document.getElementById('overlay-title').textContent = win ? '🏆 Victory!' : '💀 Defeat';
     document.getElementById('overlay-msg').textContent   = win
@@ -143,16 +168,55 @@ export class GameScene extends Phaser.Scene {
   // ─── HUD ───────────────────────────────────────────────────────────────────
 
   _updateHUD() {
-    const { player, ai, waveNum, waveTimer } = gameState;
+    const { player, ai, waveNum, waveTimer, incomeTimer } = gameState;
     _el('gold-val').textContent    = player.gold;
-    _el('income-val').textContent  = `${player.income}/w`;
+    _el('income-val').textContent  = `${player.income} (${Math.ceil(incomeTimer)}s)`;
     _el('lives-val').textContent   = player.lives;
     _el('kills-val').textContent   = player.kills;
-    _el('ai-gold-val').textContent  = ai.gold;
-    _el('ai-lives-val').textContent = ai.lives;
-    _el('ai-kills-val').textContent = ai.kills;
+    _el('ai-gold-val').textContent   = ai.gold;
+    _el('ai-income-val').textContent = ai.income;
+    _el('ai-lives-val').textContent  = ai.lives;
+    _el('ai-kills-val').textContent  = ai.kills;
     _el('wave-timer').textContent  = Math.ceil(waveTimer);
     _el('wave-label').textContent  = `Wave ${waveNum}`;
+
+    this._updateSendLocks();
+    this._updateTowerButtons();
+  }
+
+  /** Refresh Upgrade/Sell button labels for the selected tower (DOM writes only on change). */
+  _updateTowerButtons() {
+    const sel = gameState.selectedTower;
+    const mine = sel && sel.p === gameState.player;
+
+    const upBtn = _el('upgrade-btn');
+    let upLabel = '', upDisabled = true;
+    if (mine) {
+      const up = nextUpgrade(sel.tower);
+      upLabel    = up ? `Upgrade (${up.cost}g)` : 'MAX TIER';
+      upDisabled = !up || gameState.player.gold < up.cost;
+    }
+    const upDisplay = mine ? '' : 'none';
+    if (upBtn.style.display !== upDisplay)   upBtn.style.display = upDisplay;
+    if (upBtn.textContent !== upLabel)       upBtn.textContent   = upLabel;
+    if (upBtn.disabled !== upDisabled)       upBtn.disabled      = upDisabled;
+
+    const sellBtn   = _el('sell-btn');
+    const sellLabel = mine
+      ? `Sell (${Math.floor(sel.tower.invested * 0.5)}g)`
+      : 'Sell (50%)';
+    if (sellBtn.textContent !== sellLabel) sellBtn.textContent = sellLabel;
+  }
+
+  /** Grey out send buttons whose unlock wave hasn't been reached yet. */
+  _updateSendLocks() {
+    for (const btn of document.querySelectorAll('.send-btn')) {
+      const locked = gameState.waveNum < Number(btn.dataset.unlock);
+      if (btn.disabled !== locked) {
+        btn.disabled = locked;
+        btn.classList.toggle('locked', locked);
+      }
+    }
   }
 
   // ─── Rendering ─────────────────────────────────────────────────────────────
@@ -169,7 +233,11 @@ export class GameScene extends Phaser.Scene {
     this._drawGrid(g, p, hover);
     p.towers.forEach(t  => this._drawTower(g, p, t));
     p.creeps.forEach(c  => { if (c.hp > 0) this._drawCreep(g, c); });
-    p.projectiles.forEach(pr => { if (!pr.done && !pr.instant) this._drawProjectile(g, pr); });
+    p.projectiles.forEach(pr => { if (!pr.done) this._drawProjectile(g, pr); });
+    for (const pt of p.particles) {
+      g.fillStyle(pt.color, Math.max(0, pt.life / pt.maxLife));
+      g.fillCircle(pt.x, pt.y, pt.size);
+    }
   }
 
   _drawGrid(g, p, hover) {
@@ -178,20 +246,30 @@ export class GameScene extends Phaser.Scene {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const x = p.offsetX + c * CELL, y = r * CELL;
-        g.fillStyle(pathSet.has(r * COLS + c) ? 0x1e2a1e : 0x1a1a2e, 1);
+        const onPath = pathSet.has(r * COLS + c);
+        const checker = (r + c) % 2 === 0;
+        g.fillStyle(
+          onPath ? (checker ? 0x1c2e1c : 0x203424)
+                 : (checker ? 0x16162a : 0x181830),
+          1
+        );
         g.fillRect(x, y, CELL, CELL);
-        g.lineStyle(1, 0x252535, 1);
+        g.lineStyle(1, 0x222236, 0.6);
         g.strokeRect(x, y, CELL, CELL);
       }
     }
 
-    // Spawn marker (green square)
+    // Spawn / exit markers with a slow breathing glow
+    const pulse = 0.5 + Math.sin(this.time.now / 400) * 0.25;
     g.fillStyle(0x00ff88, 1);
     g.fillRect(p.offsetX + SPAWN_COL * CELL + 4, SPAWN_ROW * CELL + 4, CELL - 8, CELL - 8);
+    g.lineStyle(2, 0x00ff88, pulse);
+    g.strokeCircle(p.offsetX + SPAWN_COL * CELL + CELL / 2, SPAWN_ROW * CELL + CELL / 2, CELL * 0.7);
 
-    // Exit marker (red square)
     g.fillStyle(0xff4444, 1);
     g.fillRect(p.offsetX + EXIT_COL * CELL + 4, EXIT_ROW * CELL + 4, CELL - 8, CELL - 8);
+    g.lineStyle(2, 0xff4444, pulse);
+    g.strokeCircle(p.offsetX + EXIT_COL * CELL + CELL / 2, EXIT_ROW * CELL + CELL / 2, CELL * 0.7);
 
     // Placement preview (player board only)
     if (!p.isAI && hover && gameState.placingTower) {
@@ -213,7 +291,7 @@ export class GameScene extends Phaser.Scene {
   _drawTower(g, p, t) {
     const cx = p.offsetX + t.col * CELL + CELL / 2;
     const cy = t.row * CELL + CELL / 2;
-    const r  = CELL / 2 - 3;
+    const r  = Math.min(CELL / 2 - 1, CELL / 2 - 3 + t.tier * 2); // grows per tier
     const d  = t.def;
 
     g.fillStyle(d.cn, 1);
@@ -237,27 +315,54 @@ export class GameScene extends Phaser.Scene {
         g.strokeRect(cx - r, cy - r, r * 2, r * 2);
     }
 
+    // Muzzle flash
+    if (t.flash > 0) {
+      g.fillStyle(0xffffcc, Math.min(0.7, t.flash * 8));
+      g.fillCircle(cx, cy, r + 3);
+    }
+
+    // Tier pips
+    for (let i = 0; i < t.tier; i++) {
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(cx - 4 + i * 8, cy + r - 3, 2);
+    }
+
     // Highlight selected tower
     const sel = gameState.selectedTower;
     if (sel && sel.tower === t) {
       g.lineStyle(2, 0xffd700, 1);   g.strokeCircle(cx, cy, CELL / 2 - 1);
-      g.lineStyle(1, 0xffd700, 0.25); g.strokeCircle(cx, cy, d.range * CELL);
+      g.lineStyle(1, 0xffd700, 0.25); g.strokeCircle(cx, cy, towerStats(t).range * CELL);
     }
   }
 
   _drawCreep(g, c) {
     const r = c.size;
+    // Walk wobble — small perpendicular sway along the heading
+    const wob = Math.sin(c.age * 12) * 1.4;
+    const x = c.x - c.hy * wob;
+    const y = c.y + c.hx * wob;
+
     g.fillStyle(c.cn, 1);
-    g.fillCircle(c.x, c.y, r);
+    g.fillCircle(x, y, r);
+
+    // Facing nub
+    g.fillStyle(0xffffff, 0.85);
+    g.fillCircle(x + c.hx * (r - 1), y + c.hy * (r - 1), Math.max(1.5, r * 0.3));
+
+    // Hit flash
+    if (c.flash > 0) {
+      g.fillStyle(0xffffff, Math.min(0.8, c.flash * 9));
+      g.fillCircle(x, y, r);
+    }
 
     if (c.slow > 0) {
       g.lineStyle(2, 0x88ccff, 1);
-      g.strokeCircle(c.x, c.y, r + 2);
+      g.strokeCircle(x, y, r + 2);
     }
 
     // HP bar
     const bw = r * 2 + 2, bh = 3;
-    const bx = c.x - bw / 2, by = c.y - r - 6;
+    const bx = x - bw / 2, by = y - r - 6;
     g.fillStyle(0x333333, 1); g.fillRect(bx, by, bw, bh);
     const ratio = c.hp / c.maxHp;
     g.fillStyle(ratio > 0.5 ? 0x44ff44 : ratio > 0.25 ? 0xffaa00 : 0xff2222, 1);
@@ -265,6 +370,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   _drawProjectile(g, proj) {
+    if (proj.chainPts) {
+      // Chain bolt — polyline through every struck creep
+      g.lineStyle(2, proj.cn, Math.min(1, (proj.life ?? 0.15) * 8));
+      g.beginPath();
+      g.moveTo(proj.chainPts[0][0], proj.chainPts[0][1]);
+      for (let i = 1; i < proj.chainPts.length; i++) {
+        g.lineTo(proj.chainPts[i][0], proj.chainPts[i][1]);
+      }
+      g.strokePath();
+      return;
+    }
+    if (proj.instant) {
+      // Hitscan tracer — brief line from muzzle to target
+      g.lineStyle(1, proj.cn, Math.min(1, (proj.life ?? 0.08) * 10));
+      g.beginPath();
+      g.moveTo(proj.x, proj.y);
+      g.lineTo(proj.tx, proj.ty);
+      g.strokePath();
+      return;
+    }
     g.fillStyle(proj.cn, 1);
     g.fillCircle(proj.x, proj.y, 4);
   }

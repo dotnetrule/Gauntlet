@@ -1,5 +1,9 @@
 import { makeGrid, computePath } from './systems/pathfinding.js';
-import { BOARD_W, GUTTER } from './config/constants.js';
+import { makeAIState } from './systems/ai.js';
+import {
+  BOARD_W, GUTTER,
+  INCOME_INTERVAL, START_INCOME, START_GOLD,
+} from './config/constants.js';
 
 // ─── Shared game state ────────────────────────────────────────────────────────
 // A single mutable object imported by every module that needs game data.
@@ -9,12 +13,13 @@ export const gameState = {
   player:        null,   // PlayerState
   ai:            null,   // PlayerState
   waveNum:       1,
-  waveTimer:     25,
+  waveTimer:     30,
+  incomeTimer:   INCOME_INTERVAL,
   gameOver:      false,
   gameSpeed:     1,
   selectedTower: null,   // { tower, p } | null
   placingTower:  null,   // TowerDef    | null
-  aiState:       null,   // { buildTimer, sendTimer }
+  aiState:       null,   // see makeAIState() in systems/ai.js
   scene:         null,   // Phaser.Scene — set by GameScene.create()
 };
 
@@ -27,9 +32,10 @@ export function makePlayer(isAI, offsetX) {
     towers:     [],
     creeps:     [],
     projectiles:[],
+    particles:  [],
     floats:     [],   // active Phaser.GameObjects.Text
-    gold:    200,
-    income:   10,
+    gold:    START_GOLD,
+    income:  START_INCOME,
     lives:    20,
     kills:     0,
     spawnQueue: [],
@@ -46,12 +52,13 @@ export function initGame() {
   gameState.player        = makePlayer(false, 0);
   gameState.ai            = makePlayer(true, BOARD_W + GUTTER);
   gameState.waveNum       = 1;
-  gameState.waveTimer     = 25;
+  gameState.waveTimer     = 30;
+  gameState.incomeTimer   = INCOME_INTERVAL;
   gameState.gameOver      = false;
   gameState.gameSpeed     = 1;
   gameState.selectedTower = null;
   gameState.placingTower  = null;
-  gameState.aiState       = { buildTimer: 8, sendTimer: 15 };
+  gameState.aiState       = makeAIState();
 }
 
 // ─── Floating text ────────────────────────────────────────────────────────────
