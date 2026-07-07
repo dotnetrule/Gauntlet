@@ -13,6 +13,8 @@ import { updateCreep } from '../entities/creep.js';
 import { updateProjectile } from '../entities/projectile.js';
 import { startWave, payIncome, processSpawnQueue } from '../systems/waves.js';
 import { updateAI } from '../systems/ai.js';
+import { updateParticles } from '../systems/particles.js';
+import { sfx } from '../systems/sfx.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -125,10 +127,26 @@ export class GameScene extends Phaser.Scene {
       p.towers.forEach(t  => updateTower(p, t, dt));
       p.creeps.filter(c => c.hp > 0).forEach(c => updateCreep(p, c, dt));
       p.projectiles.forEach(pr => updateProjectile(p, pr, dt));
+      updateParticles(p, dt);
       updateFloats(p, dt);
 
       p.creeps      = p.creeps.filter(c  => c.hp > 0);
       p.projectiles = p.projectiles.filter(pr => !pr.done);
+    }
+
+    // Consume one-shot feedback flags set by entity modules
+    if (gameState.shake) {
+      this.cameras.main.shake(150, 0.004);
+      gameState.shake = false;
+    }
+    if (gameState.incomePulse) {
+      gameState.incomePulse = false;
+      for (const id of ['gold-val', 'income-val']) {
+        const el = _el(id);
+        el.classList.remove('pulse');
+        void el.offsetWidth;   // restart the CSS animation
+        el.classList.add('pulse');
+      }
     }
   }
 
@@ -138,6 +156,7 @@ export class GameScene extends Phaser.Scene {
 
     gameState.gameOver = true;
     const win = ai.lives <= 0;
+    sfx(win ? 'win' : 'lose');
 
     document.getElementById('overlay-title').textContent = win ? '🏆 Victory!' : '💀 Defeat';
     document.getElementById('overlay-msg').textContent   = win
@@ -215,6 +234,10 @@ export class GameScene extends Phaser.Scene {
     p.towers.forEach(t  => this._drawTower(g, p, t));
     p.creeps.forEach(c  => { if (c.hp > 0) this._drawCreep(g, c); });
     p.projectiles.forEach(pr => { if (!pr.done) this._drawProjectile(g, pr); });
+    for (const pt of p.particles) {
+      g.fillStyle(pt.color, Math.max(0, pt.life / pt.maxLife));
+      g.fillCircle(pt.x, pt.y, pt.size);
+    }
   }
 
   _drawGrid(g, p, hover) {
@@ -223,20 +246,30 @@ export class GameScene extends Phaser.Scene {
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const x = p.offsetX + c * CELL, y = r * CELL;
-        g.fillStyle(pathSet.has(r * COLS + c) ? 0x1e2a1e : 0x1a1a2e, 1);
+        const onPath = pathSet.has(r * COLS + c);
+        const checker = (r + c) % 2 === 0;
+        g.fillStyle(
+          onPath ? (checker ? 0x1c2e1c : 0x203424)
+                 : (checker ? 0x16162a : 0x181830),
+          1
+        );
         g.fillRect(x, y, CELL, CELL);
-        g.lineStyle(1, 0x252535, 1);
+        g.lineStyle(1, 0x222236, 0.6);
         g.strokeRect(x, y, CELL, CELL);
       }
     }
 
-    // Spawn marker (green square)
+    // Spawn / exit markers with a slow breathing glow
+    const pulse = 0.5 + Math.sin(this.time.now / 400) * 0.25;
     g.fillStyle(0x00ff88, 1);
     g.fillRect(p.offsetX + SPAWN_COL * CELL + 4, SPAWN_ROW * CELL + 4, CELL - 8, CELL - 8);
+    g.lineStyle(2, 0x00ff88, pulse);
+    g.strokeCircle(p.offsetX + SPAWN_COL * CELL + CELL / 2, SPAWN_ROW * CELL + CELL / 2, CELL * 0.7);
 
-    // Exit marker (red square)
     g.fillStyle(0xff4444, 1);
     g.fillRect(p.offsetX + EXIT_COL * CELL + 4, EXIT_ROW * CELL + 4, CELL - 8, CELL - 8);
+    g.lineStyle(2, 0xff4444, pulse);
+    g.strokeCircle(p.offsetX + EXIT_COL * CELL + CELL / 2, EXIT_ROW * CELL + CELL / 2, CELL * 0.7);
 
     // Placement preview (player board only)
     if (!p.isAI && hover && gameState.placingTower) {
@@ -282,6 +315,12 @@ export class GameScene extends Phaser.Scene {
         g.strokeRect(cx - r, cy - r, r * 2, r * 2);
     }
 
+    // Muzzle flash
+    if (t.flash > 0) {
+      g.fillStyle(0xffffcc, Math.min(0.7, t.flash * 8));
+      g.fillCircle(cx, cy, r + 3);
+    }
+
     // Tier pips
     for (let i = 0; i < t.tier; i++) {
       g.fillStyle(0xffffff, 1);
@@ -298,17 +337,32 @@ export class GameScene extends Phaser.Scene {
 
   _drawCreep(g, c) {
     const r = c.size;
+    // Walk wobble — small perpendicular sway along the heading
+    const wob = Math.sin(c.age * 12) * 1.4;
+    const x = c.x - c.hy * wob;
+    const y = c.y + c.hx * wob;
+
     g.fillStyle(c.cn, 1);
-    g.fillCircle(c.x, c.y, r);
+    g.fillCircle(x, y, r);
+
+    // Facing nub
+    g.fillStyle(0xffffff, 0.85);
+    g.fillCircle(x + c.hx * (r - 1), y + c.hy * (r - 1), Math.max(1.5, r * 0.3));
+
+    // Hit flash
+    if (c.flash > 0) {
+      g.fillStyle(0xffffff, Math.min(0.8, c.flash * 9));
+      g.fillCircle(x, y, r);
+    }
 
     if (c.slow > 0) {
       g.lineStyle(2, 0x88ccff, 1);
-      g.strokeCircle(c.x, c.y, r + 2);
+      g.strokeCircle(x, y, r + 2);
     }
 
     // HP bar
     const bw = r * 2 + 2, bh = 3;
-    const bx = c.x - bw / 2, by = c.y - r - 6;
+    const bx = x - bw / 2, by = y - r - 6;
     g.fillStyle(0x333333, 1); g.fillRect(bx, by, bw, bh);
     const ratio = c.hp / c.maxHp;
     g.fillStyle(ratio > 0.5 ? 0x44ff44 : ratio > 0.25 ? 0xffaa00 : 0xff2222, 1);

@@ -1,6 +1,8 @@
 import { gameState } from '../state.js';
 import { astar, computePath } from '../systems/pathfinding.js';
 import { dealDamage } from './combat.js';
+import { sfx } from '../systems/sfx.js';
+import { burst } from '../systems/particles.js';
 import { COLS, CELL, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL } from '../config/constants.js';
 
 // ─── Placement ────────────────────────────────────────────────────────────────
@@ -25,9 +27,10 @@ export function placeTower(p, row, col, def) {
   if (!canPlace(p, row, col) || p.gold < def.cost) return false;
   p.gold          -= def.cost;
   p.grid[row][col] = 1;
-  p.towers.push({ row, col, def, tier: 0, invested: def.cost, cooldown: 0 });
+  p.towers.push({ row, col, def, tier: 0, invested: def.cost, cooldown: 0, flash: 0 });
   p.path = computePath(p.grid);
   p.creeps.forEach(c => rerouteCreep(p, c));
+  sfx('place');
   return true;
 }
 
@@ -48,6 +51,10 @@ export function upgradeTower(p, t) {
   p.gold     -= up.cost;
   t.tier     += 1;
   t.invested += up.cost;
+  const cx = p.offsetX + t.col * CELL + CELL / 2;
+  const cy = t.row * CELL + CELL / 2;
+  burst(p, cx, cy, 0xffd700, 12, { speed: 70, life: 0.5 });
+  sfx('upgrade');
   return true;
 }
 
@@ -58,6 +65,7 @@ export function sellTower(p, tower) {
   p.towers             = p.towers.filter(t => t !== tower);
   p.path               = computePath(p.grid);
   p.creeps.forEach(c => rerouteCreep(p, c));
+  sfx('sell');
 }
 
 // ─── Per-frame update ─────────────────────────────────────────────────────────
@@ -65,6 +73,7 @@ export function sellTower(p, tower) {
 /** Fire at the furthest-along creep in range, respecting cooldown. */
 export function updateTower(p, t, dt) {
   t.cooldown = Math.max(0, t.cooldown - dt);
+  t.flash    = Math.max(0, t.flash - dt);
   if (t.cooldown > 0) return;
 
   const stats = towerStats(t);
@@ -81,6 +90,8 @@ export function updateTower(p, t, dt) {
   if (!best) return;
 
   t.cooldown = 1 / stats.rate;
+  t.flash    = 0.07;
+  sfx(`shot_${t.def.id}`);
 
   if (stats.chain > 0) {
     // Chain lightning — hit the primary plus its nearest neighbours

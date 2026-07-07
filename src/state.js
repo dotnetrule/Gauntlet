@@ -32,6 +32,7 @@ export function makePlayer(isAI, offsetX) {
     towers:     [],
     creeps:     [],
     projectiles:[],
+    particles:  [],
     floats:     [],   // active Phaser.GameObjects.Text
     gold:    START_GOLD,
     income:  START_INCOME,

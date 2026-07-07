@@ -2,6 +2,7 @@ import { gameState, addFloat } from '../state.js';
 import { getWaveDef } from '../config/waves.js';
 import { spawnCreepFromDef } from '../entities/creep.js';
 import { BOARD_W, WAVE_INTERVAL, INCOME_INTERVAL } from '../config/constants.js';
+import { sfx } from './sfx.js';
 
 /**
  * Kick off the next wave: queues baseline creeps on both lanes.
@@ -18,6 +19,7 @@ export function startWave() {
 
   gameState.waveNum++;
   gameState.waveTimer = WAVE_INTERVAL;
+  sfx('wave');
 }
 
 /**
@@ -32,6 +34,8 @@ export function payIncome() {
   addFloat(ai,     ai.offsetX     + BOARD_W / 2, 16, `+${ai.income} income`,     '#90ee90');
 
   gameState.incomeTimer = INCOME_INTERVAL;
+  gameState.incomePulse = true;   // HUD pulse, consumed by GameScene
+  sfx('income');
 }
 
 /**
@@ -56,4 +60,5 @@ export function sendUnit(sender, target, def, count = 1) {
   }
   sender.income += def.incomeBonus;
   addFloat(sender, sender.offsetX + BOARD_W / 2, 32, `+${def.incomeBonus} income`, '#90ee90');
+  sfx('send');
 }

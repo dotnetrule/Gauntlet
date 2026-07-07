@@ -1,4 +1,5 @@
 import { dealDamage } from './combat.js';
+import { burst } from '../systems/particles.js';
 
 /**
  * Advance a projectile toward its target position.
@@ -27,6 +28,7 @@ export function updateProjectile(p, proj, dt) {
 
     if (proj.splash > 0 && proj.damage > 0) {
       // AoE — hit every creep within splash radius
+      burst(p, proj.x, proj.y, proj.cn, 8, { speed: 100, life: 0.3 });
       for (const c of p.creeps) {
         if (Math.hypot(c.x - proj.x, c.y - proj.y) <= proj.splash) {
           dealDamage(p, c, proj.damage, proj.slow);
