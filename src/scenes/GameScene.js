@@ -8,7 +8,7 @@ import { gameState, initGame, updateFloats } from '../state.js';
 import { canPlace, placeTower, sellTower, updateTower } from '../entities/tower.js';
 import { updateCreep } from '../entities/creep.js';
 import { updateProjectile } from '../entities/projectile.js';
-import { startWave, processSpawnQueue } from '../systems/waves.js';
+import { startWave, payIncome, processSpawnQueue } from '../systems/waves.js';
 import { updateAI } from '../systems/ai.js';
 
 export class GameScene extends Phaser.Scene {
@@ -111,6 +111,9 @@ export class GameScene extends Phaser.Scene {
     gameState.waveTimer -= dt;
     if (gameState.waveTimer <= 0) startWave();
 
+    gameState.incomeTimer -= dt;
+    if (gameState.incomeTimer <= 0) payIncome();
+
     processSpawnQueue(gameState.player, dt);
     processSpawnQueue(gameState.ai, dt);
     updateAI(dt);
@@ -143,16 +146,30 @@ export class GameScene extends Phaser.Scene {
   // ─── HUD ───────────────────────────────────────────────────────────────────
 
   _updateHUD() {
-    const { player, ai, waveNum, waveTimer } = gameState;
+    const { player, ai, waveNum, waveTimer, incomeTimer } = gameState;
     _el('gold-val').textContent    = player.gold;
-    _el('income-val').textContent  = `${player.income}/w`;
+    _el('income-val').textContent  = `${player.income} (${Math.ceil(incomeTimer)}s)`;
     _el('lives-val').textContent   = player.lives;
     _el('kills-val').textContent   = player.kills;
-    _el('ai-gold-val').textContent  = ai.gold;
-    _el('ai-lives-val').textContent = ai.lives;
-    _el('ai-kills-val').textContent = ai.kills;
+    _el('ai-gold-val').textContent   = ai.gold;
+    _el('ai-income-val').textContent = ai.income;
+    _el('ai-lives-val').textContent  = ai.lives;
+    _el('ai-kills-val').textContent  = ai.kills;
     _el('wave-timer').textContent  = Math.ceil(waveTimer);
     _el('wave-label').textContent  = `Wave ${waveNum}`;
+
+    this._updateSendLocks();
+  }
+
+  /** Grey out send buttons whose unlock wave hasn't been reached yet. */
+  _updateSendLocks() {
+    for (const btn of document.querySelectorAll('.send-btn')) {
+      const locked = gameState.waveNum < Number(btn.dataset.unlock);
+      if (btn.disabled !== locked) {
+        btn.disabled = locked;
+        btn.classList.toggle('locked', locked);
+      }
+    }
   }
 
   // ─── Rendering ─────────────────────────────────────────────────────────────

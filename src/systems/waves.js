@@ -1,10 +1,11 @@
 import { gameState, addFloat } from '../state.js';
 import { getWaveDef } from '../config/waves.js';
-import { computePath } from './pathfinding.js';
-import { BOARD_W } from '../config/constants.js';
+import { spawnCreepFromDef } from '../entities/creep.js';
+import { BOARD_W, WAVE_INTERVAL, INCOME_INTERVAL } from '../config/constants.js';
 
 /**
- * Kick off the next wave: queues creeps on both lanes and grants income.
+ * Kick off the next wave: queues baseline creeps on both lanes.
+ * These are a bounty drip — the real pressure comes from player sends.
  */
 export function startWave() {
   const { player, ai } = gameState;
@@ -15,15 +16,22 @@ export function startWave() {
     ai.spawnQueue.push({ def, delay: i * 0.6 });
   }
 
-  // Grant income gold
+  gameState.waveNum++;
+  gameState.waveTimer = WAVE_INTERVAL;
+}
+
+/**
+ * Pay both players their periodic income. Called on the income tick timer.
+ */
+export function payIncome() {
+  const { player, ai } = gameState;
   player.gold += player.income;
   ai.gold     += ai.income;
 
   addFloat(player, player.offsetX + BOARD_W / 2, 16, `+${player.income} income`, '#90ee90');
   addFloat(ai,     ai.offsetX     + BOARD_W / 2, 16, `+${ai.income} income`,     '#90ee90');
 
-  gameState.waveNum++;
-  gameState.waveTimer = 25;
+  gameState.incomeTimer = INCOME_INTERVAL;
 }
 
 /**
@@ -39,34 +47,13 @@ export function processSpawnQueue(p, dt) {
 }
 
 /**
- * Dispatch unit(s) from def into target player's lane.
+ * Dispatch unit(s) from `sender` into `target`'s lane.
+ * The sender's income rises permanently — sending IS the economy.
  */
-export function sendUnit(target, def, count = 1) {
+export function sendUnit(sender, target, def, count = 1) {
   for (let i = 0; i < count; i++) {
     target.spawnQueue.push({ def, delay: i * 0.5 });
   }
-}
-
-// ── internal ──────────────────────────────────────────────────────────────────
-// Kept here to avoid circular imports (creep.js → waves.js → creep.js).
-// The actual creep spawning logic lives in entities/creep.js and is re-exported
-// via the spawn queue mechanism, so we inline a minimal version here.
-import { CELL, SPAWN_COL, SPAWN_ROW } from '../config/constants.js';
-
-function spawnCreepFromDef(p, def) {
-  const path = computePath(p.grid);
-  if (!path) return;
-  p.creeps.push({
-    x: p.offsetX + SPAWN_COL * CELL + CELL / 2,
-    y: SPAWN_ROW * CELL + CELL / 2,
-    hp:    def.hp,
-    maxHp: def.hp,
-    speed:  def.speed,
-    reward: def.reward,
-    cn:     def.cn,
-    size:   def.size ?? 6,
-    slow: 0, slowTimer: 0,
-    pathIndex: 1,
-    path,
-  });
+  sender.income += def.incomeBonus;
+  addFloat(sender, sender.offsetX + BOARD_W / 2, 32, `+${def.incomeBonus} income`, '#90ee90');
 }

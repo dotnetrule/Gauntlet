@@ -37,12 +37,14 @@ export function updateAI(dt) {
   if (s.sendTimer <= 0) {
     s.sendTimer = 18 + Math.random() * 10;
 
-    const affordable = Object.values(SEND_UNITS).filter(u => u.cost <= ai.gold * 0.5);
+    const affordable = Object.values(SEND_UNITS).filter(
+      u => u.cost <= ai.gold * 0.5 && gameState.waveNum >= u.unlockWave
+    );
     if (affordable.length) {
       const def = affordable[Math.floor(Math.random() * affordable.length)];
       if (ai.gold >= def.cost) {
         ai.gold -= def.cost;
-        sendUnit(player, def, def.count ?? 1);
+        sendUnit(ai, player, def, def.count ?? 1);
         addFloat(ai, ai.offsetX + BOARD_W / 2, 55, `Sent ${def.name}!`, '#ffa0a0');
       }
     }

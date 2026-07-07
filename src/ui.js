@@ -64,26 +64,31 @@ function _buildSendButtons() {
   Object.values(SEND_UNITS).forEach(def => {
     const btn = document.createElement('button');
     btn.className = 'btn send-btn';
+    btn.dataset.unlock = def.unlockWave;
     btn.innerHTML = `
       <div class="sb-name">${def.name}</div>
       <div class="sb-cost">💰${def.cost}</div>
+      <div class="sb-income">+${def.incomeBonus} income</div>
       <div class="sb-hp">❤️${def.hp}${def.count ? ` ×${def.count}` : ''}</div>`;
     btn.title = [
       `Send ${def.name} into the opponent's lane`,
       def.desc,
       `Cost: ${def.cost}g | HP: ${def.hp} | Speed: ${def.speed}`,
+      `Permanently raises YOUR income by ${def.incomeBonus}`,
       def.count ? `Sends ${def.count} units at once` : '',
+      def.unlockWave > 1 ? `Unlocks at wave ${def.unlockWave}` : '',
     ].filter(Boolean).join('\n');
 
     btn.addEventListener('click', () => {
       if (!gameState.player || gameState.gameOver) return;
+      if (gameState.waveNum < def.unlockWave) return;
       if (gameState.player.gold < def.cost) {
         addFloat(gameState.player, BOARD_W / 2, 60, 'Not enough gold!', '#ff4444');
         return;
       }
       gameState.player.gold -= def.cost;
-      sendUnit(gameState.ai, def, def.count ?? 1);
-      addFloat(gameState.player, BOARD_W / 2, 40, `Sent ${def.name}!`, '#ffa0a0');
+      sendUnit(gameState.player, gameState.ai, def, def.count ?? 1);
+      addFloat(gameState.player, BOARD_W / 2, 48, `Sent ${def.name}!`, '#ffa0a0');
     });
 
     container.appendChild(btn);

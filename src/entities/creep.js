@@ -1,5 +1,27 @@
 import { addFloat } from '../state.js';
-import { CELL, EXIT_COL, EXIT_ROW } from '../config/constants.js';
+import { computePath } from '../systems/pathfinding.js';
+import { CELL, EXIT_COL, EXIT_ROW, SPAWN_COL, SPAWN_ROW } from '../config/constants.js';
+
+/**
+ * Spawn a creep from a definition at player p's lane entrance.
+ */
+export function spawnCreepFromDef(p, def) {
+  const path = computePath(p.grid);
+  if (!path) return;
+  p.creeps.push({
+    x: p.offsetX + SPAWN_COL * CELL + CELL / 2,
+    y: SPAWN_ROW * CELL + CELL / 2,
+    hp:    def.hp,
+    maxHp: def.hp,
+    speed:  def.speed,
+    reward: def.reward,
+    cn:     def.cn,
+    size:   def.size ?? 6,
+    slow: 0, slowTimer: 0,
+    pathIndex: 1,
+    path,
+  });
+}
 
 /**
  * Advance a single creep along its path.
