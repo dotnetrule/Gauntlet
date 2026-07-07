@@ -2,13 +2,18 @@ import { dealDamage } from './combat.js';
 
 /**
  * Advance a projectile toward its target position.
- * On arrival: splash projectiles deal AoE damage; instant tracers just expire.
+ * On arrival: splash projectiles deal AoE damage.
+ * Instant tracers and chain bolts are visual-only and fade on a short timer.
  */
 export function updateProjectile(p, proj, dt) {
   if (proj.done) return;
 
-  // Instant tracers are visual-only — expire immediately
-  if (proj.instant) { proj.done = true; return; }
+  // Visual-only effects (tracers, chain bolts) — expire on a timer
+  if (proj.instant) {
+    proj.life = (proj.life ?? 0.08) - dt;
+    if (proj.life <= 0) proj.done = true;
+    return;
+  }
 
   const dx   = proj.tx - proj.x;
   const dy   = proj.ty - proj.y;

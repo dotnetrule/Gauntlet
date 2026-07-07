@@ -1,9 +1,9 @@
 import { gameState, addFloat } from '../state.js';
 import { TOWERS } from '../config/towers.js';
 import { SEND_UNITS } from '../config/units.js';
-import { placeTower } from '../entities/tower.js';
+import { placeTower, upgradeTower, nextUpgrade, towerStats } from '../entities/tower.js';
 import { sendUnit } from './waves.js';
-import { ROWS, COLS, BOARD_W, INCOME_INTERVAL } from '../config/constants.js';
+import { ROWS, COLS, CELL, BOARD_W, INCOME_INTERVAL } from '../config/constants.js';
 
 // ─── Tuning knobs ─────────────────────────────────────────────────────────────
 const DECIDE_INTERVAL      = 2;     // seconds between AI decisions
@@ -16,6 +16,7 @@ const PRESSURE_PLAYER_LIVES = 8;    // player at/below this → pressure
 const FORCE_SEND_AFTER     = 45;    // seconds without a send → force one
 const FORCE_SEND_MIN_GOLD  = 200;
 const ECO_BUILD_INTERVAL   = INCOME_INTERVAL * 3; // ~1 tower per 3 income ticks
+const ECO_UPGRADE_CHANCE   = 0.4;   // eco builds that upgrade instead of placing
 
 export function makeAIState() {
   return {
@@ -86,13 +87,17 @@ function _actEco(ai, player, s) {
   const def = _largestAffordableSend(ai.gold - GOLD_RESERVE);
   if (def) _doSend(ai, player, s, def);
 
-  if (s.buildTimer <= 0 && _buildTower(ai)) {
-    s.buildTimer = ECO_BUILD_INTERVAL;
+  if (s.buildTimer <= 0) {
+    const built = Math.random() < ECO_UPGRADE_CHANCE
+      ? _upgradeBestTower(ai) || _buildTower(ai)
+      : _buildTower(ai);
+    if (built) s.buildTimer = ECO_BUILD_INTERVAL;
   }
 }
 
-/** Bleeding — spend on maze towers along the current path. */
+/** Bleeding — spend on maze towers and upgrades along the current path. */
 function _actDefend(ai) {
+  _upgradeBestTower(ai);
   // Up to two towers per decision while gold allows
   for (let i = 0; i < 2; i++) {
     if (!_buildTower(ai)) break;
@@ -160,6 +165,33 @@ function _buildTower(ai) {
     if (placeTower(ai, row, col, def)) return true;
   }
   return false;
+}
+
+/** Upgrade the affordable tower whose range covers the most path cells. */
+function _upgradeBestTower(ai) {
+  let best = null, bestCover = -1;
+  for (const t of ai.towers) {
+    const up = nextUpgrade(t);
+    if (!up || up.cost > ai.gold) continue;
+    const cover = _pathCoverage(ai, t);
+    if (cover > bestCover) { best = t; bestCover = cover; }
+  }
+  return best ? upgradeTower(ai, best) : false;
+}
+
+/** Number of path cells within a tower's range. */
+function _pathCoverage(ai, t) {
+  const stats = towerStats(t);
+  const rng = stats.range * CELL;
+  const tx  = ai.offsetX + t.col * CELL + CELL / 2;
+  const ty  = t.row * CELL + CELL / 2;
+  let n = 0;
+  for (const [r, c] of ai.path ?? []) {
+    const wx = ai.offsetX + c * CELL + CELL / 2;
+    const wy = r * CELL + CELL / 2;
+    if (Math.hypot(wx - tx, wy - ty) <= rng) n++;
+  }
+  return n;
 }
 
 /** Shuffled list of empty cells 4-adjacent to the AI's current path. */

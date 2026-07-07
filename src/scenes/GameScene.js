@@ -5,7 +5,10 @@ import {
   GUTTER, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL,
 } from '../config/constants.js';
 import { gameState, initGame, updateFloats } from '../state.js';
-import { canPlace, placeTower, sellTower, updateTower } from '../entities/tower.js';
+import {
+  canPlace, placeTower, sellTower, updateTower,
+  towerStats, nextUpgrade,
+} from '../entities/tower.js';
 import { updateCreep } from '../entities/creep.js';
 import { updateProjectile } from '../entities/projectile.js';
 import { startWave, payIncome, processSpawnQueue } from '../systems/waves.js';
@@ -159,6 +162,31 @@ export class GameScene extends Phaser.Scene {
     _el('wave-label').textContent  = `Wave ${waveNum}`;
 
     this._updateSendLocks();
+    this._updateTowerButtons();
+  }
+
+  /** Refresh Upgrade/Sell button labels for the selected tower (DOM writes only on change). */
+  _updateTowerButtons() {
+    const sel = gameState.selectedTower;
+    const mine = sel && sel.p === gameState.player;
+
+    const upBtn = _el('upgrade-btn');
+    let upLabel = '', upDisabled = true;
+    if (mine) {
+      const up = nextUpgrade(sel.tower);
+      upLabel    = up ? `Upgrade (${up.cost}g)` : 'MAX TIER';
+      upDisabled = !up || gameState.player.gold < up.cost;
+    }
+    const upDisplay = mine ? '' : 'none';
+    if (upBtn.style.display !== upDisplay)   upBtn.style.display = upDisplay;
+    if (upBtn.textContent !== upLabel)       upBtn.textContent   = upLabel;
+    if (upBtn.disabled !== upDisabled)       upBtn.disabled      = upDisabled;
+
+    const sellBtn   = _el('sell-btn');
+    const sellLabel = mine
+      ? `Sell (${Math.floor(sel.tower.invested * 0.5)}g)`
+      : 'Sell (50%)';
+    if (sellBtn.textContent !== sellLabel) sellBtn.textContent = sellLabel;
   }
 
   /** Grey out send buttons whose unlock wave hasn't been reached yet. */
@@ -186,7 +214,7 @@ export class GameScene extends Phaser.Scene {
     this._drawGrid(g, p, hover);
     p.towers.forEach(t  => this._drawTower(g, p, t));
     p.creeps.forEach(c  => { if (c.hp > 0) this._drawCreep(g, c); });
-    p.projectiles.forEach(pr => { if (!pr.done && !pr.instant) this._drawProjectile(g, pr); });
+    p.projectiles.forEach(pr => { if (!pr.done) this._drawProjectile(g, pr); });
   }
 
   _drawGrid(g, p, hover) {
@@ -230,7 +258,7 @@ export class GameScene extends Phaser.Scene {
   _drawTower(g, p, t) {
     const cx = p.offsetX + t.col * CELL + CELL / 2;
     const cy = t.row * CELL + CELL / 2;
-    const r  = CELL / 2 - 3;
+    const r  = Math.min(CELL / 2 - 1, CELL / 2 - 3 + t.tier * 2); // grows per tier
     const d  = t.def;
 
     g.fillStyle(d.cn, 1);
@@ -254,11 +282,17 @@ export class GameScene extends Phaser.Scene {
         g.strokeRect(cx - r, cy - r, r * 2, r * 2);
     }
 
+    // Tier pips
+    for (let i = 0; i < t.tier; i++) {
+      g.fillStyle(0xffffff, 1);
+      g.fillCircle(cx - 4 + i * 8, cy + r - 3, 2);
+    }
+
     // Highlight selected tower
     const sel = gameState.selectedTower;
     if (sel && sel.tower === t) {
       g.lineStyle(2, 0xffd700, 1);   g.strokeCircle(cx, cy, CELL / 2 - 1);
-      g.lineStyle(1, 0xffd700, 0.25); g.strokeCircle(cx, cy, d.range * CELL);
+      g.lineStyle(1, 0xffd700, 0.25); g.strokeCircle(cx, cy, towerStats(t).range * CELL);
     }
   }
 
@@ -282,6 +316,26 @@ export class GameScene extends Phaser.Scene {
   }
 
   _drawProjectile(g, proj) {
+    if (proj.chainPts) {
+      // Chain bolt — polyline through every struck creep
+      g.lineStyle(2, proj.cn, Math.min(1, (proj.life ?? 0.15) * 8));
+      g.beginPath();
+      g.moveTo(proj.chainPts[0][0], proj.chainPts[0][1]);
+      for (let i = 1; i < proj.chainPts.length; i++) {
+        g.lineTo(proj.chainPts[i][0], proj.chainPts[i][1]);
+      }
+      g.strokePath();
+      return;
+    }
+    if (proj.instant) {
+      // Hitscan tracer — brief line from muzzle to target
+      g.lineStyle(1, proj.cn, Math.min(1, (proj.life ?? 0.08) * 10));
+      g.beginPath();
+      g.moveTo(proj.x, proj.y);
+      g.lineTo(proj.tx, proj.ty);
+      g.strokePath();
+      return;
+    }
     g.fillStyle(proj.cn, 1);
     g.fillCircle(proj.x, proj.y, 4);
   }

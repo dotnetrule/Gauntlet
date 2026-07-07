@@ -70,6 +70,13 @@ body {
 }
 #sell-btn:hover { background: #2a5a2a; }
 
+#upgrade-btn {
+  background: #3a2a1a; border: 2px solid #a84; color: #fc8;
+  padding: 4px 10px; font-size: 11px; cursor: pointer; border-radius: 4px;
+}
+#upgrade-btn:hover:not(:disabled) { background: #5a3a2a; }
+#upgrade-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
 #speed-btn {
   background: #2a2a4a; border: 2px solid #444; color: #eee;
   padding: 4px 10px; font-size: 12px; cursor: pointer;
@@ -135,6 +142,7 @@ body {
   <span class="section-label">SEND</span>
   <div id="send-btns" style="display:flex;gap:6px;flex-wrap:wrap"></div>
   <div class="divider"></div>
+  <button id="upgrade-btn" class="btn" style="display:none"></button>
   <button id="sell-btn"  class="btn">Sell (50%)</button>
   <button id="speed-btn" class="btn">Speed: 1x</button>
 </div>
