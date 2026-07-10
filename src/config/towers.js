@@ -15,7 +15,7 @@ export const TOWERS = {
   basic: {
     id: 'basic', name: 'Arrow', cost: 50,
     cn: 0x4488cc, cs: '#4488cc',
-    range: 3.5, damage: 12, rate: 1.2, splash: 0, slow: 0,
+    range: 3.5, damage: 25, rate: 1.2, splash: 0, slow: 0,
     desc: 'Fast single target', shape: 'rect',
     sprite: { key: 'tower-blue',   scales: [0.30, 0.34, 0.38] },
     upgrades: [
