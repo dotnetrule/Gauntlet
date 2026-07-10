@@ -2,8 +2,11 @@ import Phaser from 'phaser';
 import {
   COLS, ROWS, CELL,
   BOARD_W, BOARD_H, CANVAS_W, CANVAS_H,
-  GUTTER, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL,
+  GUTTER, WATER_PAD, SPAWN_ROW, SPAWN_COL, EXIT_ROW, EXIT_COL,
 } from '../config/constants.js';
+import { preloadAssets, registerAnims, has } from '../render/assets.js';
+import { buildTerrain, drawPathOverlay, drawBuildGrid } from '../render/board.js';
+import { syncPlayer, sweep, updateCorpses, clearAll } from '../render/sprites.js';
 import { gameState, initGame, updateFloats } from '../state.js';
 import {
   canPlace, placeTower, sellTower, updateTower,
@@ -24,30 +27,37 @@ export class GameScene extends Phaser.Scene {
   // ─── Lifecycle ─────────────────────────────────────────────────────────────
 
   preload() {
-    // No external assets yet — everything is drawn with Graphics
+    preloadAssets(this);
   }
 
   create() {
     // Make the scene accessible to entity modules (for Phaser Text creation)
     gameState.scene = this;
 
-    // Single graphics layer — cleared and redrawn every frame
-    this.gfx = this.add.graphics();
+    // World (0,0) is the player board's top-left; scroll the camera so a
+    // water margin shows around both islands.
+    this.cameras.main.setScroll(-WATER_PAD, -WATER_PAD);
+
+    registerAnims(this);
+    buildTerrain(this);
+
+    // Dynamic overlay layer (HP bars, range rings, tracers…) above all sprites
+    this.gfx = this.add.graphics().setDepth(800);
+
+    // Ghost preview sprite while placing a tower
+    this._ghost = this.add.sprite(0, 0, '__DEFAULT').setVisible(false).setDepth(810);
 
     // Static board labels (created once, stay on top)
+    const labelStyle = {
+      fontSize: '15px', fontFamily: 'Georgia, serif', fontStyle: 'bold',
+      stroke: '#1a2433', strokeThickness: 3,
+    };
     this.add
-      .text(4, 6, 'YOUR LANE', {
-        fontSize: '11px', fontFamily: 'Courier New',
-        color: '#88ccff', fontStyle: 'bold',
-      })
-      .setDepth(10);
+      .text(BOARD_W / 2, -WATER_PAD + 3, 'YOUR LANE', { ...labelStyle, color: '#9fd4ff' })
+      .setOrigin(0.5, 0).setDepth(900);
     this.add
-      .text(CANVAS_W - 4, 6, 'AI LANE', {
-        fontSize: '11px', fontFamily: 'Courier New',
-        color: '#ff8888', fontStyle: 'bold',
-      })
-      .setOrigin(1, 0)
-      .setDepth(10);
+      .text(BOARD_W + GUTTER + BOARD_W / 2, -WATER_PAD + 3, 'AI LANE', { ...labelStyle, color: '#ffb3a7' })
+      .setOrigin(0.5, 0).setDepth(900);
 
     // ── Input ────────────────────────────────────────────────────────────────
     this.input.mouse.disableContextMenu();
@@ -56,6 +66,9 @@ export class GameScene extends Phaser.Scene {
     this.input.on('pointermove', ptr => {
       this._hover = this._cellFromPtr(ptr);
     });
+    // Clear the hover cell when the pointer leaves the canvas, otherwise the
+    // placement ghost sticks to the last hovered cell.
+    this.input.on('gameout', () => { this._hover = null; });
 
     this.input.on('pointerdown', ptr => {
       if (gameState.gameOver || !gameState.player) return;
@@ -101,12 +114,13 @@ export class GameScene extends Phaser.Scene {
       this._updateHUD();
     }
 
-    this._render();
+    this._render(dt);
   }
 
   // ─── Public API (called by ui.js) ──────────────────────────────────────────
 
   resetGame() {
+    clearAll();   // destroy entity sprites BEFORE the player objects are swapped
     initGame();
   }
 
@@ -169,19 +183,53 @@ export class GameScene extends Phaser.Scene {
 
   _updateHUD() {
     const { player, ai, waveNum, waveTimer, incomeTimer } = gameState;
-    _el('gold-val').textContent    = player.gold;
-    _el('income-val').textContent  = `${player.income} (${Math.ceil(incomeTimer)}s)`;
-    _el('lives-val').textContent   = player.lives;
-    _el('kills-val').textContent   = player.kills;
-    _el('ai-gold-val').textContent   = ai.gold;
-    _el('ai-income-val').textContent = ai.income;
-    _el('ai-lives-val').textContent  = ai.lives;
-    _el('ai-kills-val').textContent  = ai.kills;
-    _el('wave-timer').textContent  = Math.ceil(waveTimer);
-    _el('wave-label').textContent  = `Wave ${waveNum}`;
+    _set('gold-val',   player.gold);
+    _set('income-val', player.income);
+    _set('lives-val',  player.lives);
+    _set('kills-val',  player.kills);
+    _set('income-timer', Math.ceil(incomeTimer));
+    _set('sb-lives',  player.lives);
+    _set('sb-income', player.income);
+    _set('sb-kills',  player.kills);
+    _set('sb-gold',   player.gold);
+    _set('ai-gold-val',   ai.gold);
+    _set('ai-income-val', ai.income);
+    _set('ai-lives-val',  ai.lives);
+    _set('ai-kills-val',  ai.kills);
+    _set('wave-timer', Math.ceil(waveTimer));
+    _set('wave-label', `Wave ${waveNum}`);
 
     this._updateSendLocks();
     this._updateTowerButtons();
+    this._updatePortrait();
+  }
+
+  /** Portrait box: selected tower stats, the def being placed, or idle text. */
+  _updatePortrait() {
+    const sel = gameState.selectedTower;
+    const placing = gameState.placingTower;
+
+    let name, stats;
+    if (sel) {
+      const t = sel.tower, s = towerStats(t);
+      name  = `${t.def.name} Tower${t.tier > 0 ? ` (Tier ${t.tier + 1})` : ''}`;
+      stats = [
+        `Damage: ${s.damage}   Rate: ${s.rate}/s`,
+        `Range: ${s.range} tiles`,
+        s.slow  ? `Slows ${(s.slow * 100).toFixed(0)}%` : '',
+        s.splash ? `Splash: ${s.splash} tiles` : '',
+        s.chain ? `Chains to ${s.chain}` : '',
+        sel.p !== gameState.player ? '(enemy tower)' : '',
+      ].filter(Boolean).join('\n');
+    } else if (placing) {
+      name  = `Build: ${placing.name}`;
+      stats = `${placing.desc}\nCost: ${placing.cost}g — click the grid to place`;
+    } else {
+      name  = 'Commander';
+      stats = 'Select a tower or pick one to build.\nSend units to grow your income.';
+    }
+    _set('portrait-name', name);
+    _set('portrait-stats', stats);
   }
 
   /** Refresh Upgrade/Sell button labels for the selected tower (DOM writes only on change). */
@@ -221,192 +269,163 @@ export class GameScene extends Phaser.Scene {
 
   // ─── Rendering ─────────────────────────────────────────────────────────────
 
-  _render() {
+  _render(dt) {
     const g = this.gfx;
     g.clear();
-    this._drawBoard(g, gameState.player, this._hover);
-    this._drawGutter(g);
-    this._drawBoard(g, gameState.ai, null);
+
+    // Sync entity sprites, retire the vanished ones (death anims, explosions)
+    const liveP  = syncPlayer(this, gameState.player);
+    const liveAI = syncPlayer(this, gameState.ai);
+    sweep(this, [liveP, liveAI]);
+    updateCorpses(dt ?? 0.016);
+
+    for (const p of [gameState.player, gameState.ai]) {
+      drawPathOverlay(g, p);
+      drawBuildGrid(g, p);
+      this._drawMarkers(g, p);
+      this._drawOverlay(g, p);
+    }
+    this._drawGhost(g, gameState.player, this._hover);
   }
 
-  _drawBoard(g, p, hover) {
-    this._drawGrid(g, p, hover);
-    p.towers.forEach(t  => this._drawTower(g, p, t));
-    p.creeps.forEach(c  => { if (c.hp > 0) this._drawCreep(g, c); });
-    p.projectiles.forEach(pr => { if (!pr.done) this._drawProjectile(g, pr); });
+  /** Spawn/exit pulses (subtle — the den/castle sprites carry the visual). */
+  _drawMarkers(g, p) {
+    const pulse = 0.35 + Math.sin(this.time.now / 400) * 0.15;
+    g.lineStyle(2, 0x66ff99, pulse);
+    g.strokeCircle(p.offsetX + SPAWN_COL * CELL + CELL / 2, SPAWN_ROW * CELL + CELL / 2, CELL * 0.7);
+    g.lineStyle(2, 0xff6655, pulse);
+    g.strokeCircle(p.offsetX + EXIT_COL * CELL + CELL / 2, EXIT_ROW * CELL + CELL / 2, CELL * 0.7);
+  }
+
+  /** Everything dynamic that stays vector: HP bars, rings, tracers, particles. */
+  _drawOverlay(g, p) {
+    // Towers: selection ring + range, tier pips, muzzle glow, fallback shape
+    for (const t of p.towers) {
+      const cx = p.offsetX + t.col * CELL + CELL / 2;
+      const cy = t.row * CELL + CELL / 2;
+
+      if (t.noSprite) this._drawTowerFallback(g, cx, cy, t);
+
+      if (t.flash > 0) {
+        g.fillStyle(0xffffcc, Math.min(0.6, t.flash * 7));
+        g.fillCircle(cx, cy - CELL * 0.55, 7);
+      }
+      for (let i = 0; i < t.tier; i++) {
+        g.fillStyle(0xffd700, 1);
+        g.fillCircle(cx - 5 + i * 10, cy + CELL / 2 - 4, 2.5);
+        g.lineStyle(1, 0x333311, 0.8);
+        g.strokeCircle(cx - 5 + i * 10, cy + CELL / 2 - 4, 2.5);
+      }
+      const sel = gameState.selectedTower;
+      if (sel && sel.tower === t) {
+        g.lineStyle(2, 0xffd700, 0.9);
+        g.strokeCircle(cx, cy, CELL / 2 + 1);
+        g.lineStyle(1.5, 0xffd700, 0.3);
+        g.strokeCircle(cx, cy, towerStats(t).range * CELL);
+      }
+    }
+
+    // Creeps: HP bar, slow ring, fallback circle
+    for (const c of p.creeps) {
+      if (c.hp <= 0) continue;
+      if (c.noSprite) this._drawCreepFallback(g, c);
+
+      const bw = 16, bh = 3;
+      const bx = c.x - bw / 2, by = c.y - 20;
+      g.fillStyle(0x1a1a1a, 0.85); g.fillRect(bx - 1, by - 1, bw + 2, bh + 2);
+      const ratio = c.hp / c.maxHp;
+      g.fillStyle(ratio > 0.5 ? 0x44dd44 : ratio > 0.25 ? 0xffaa00 : 0xff2222, 1);
+      g.fillRect(bx, by, bw * ratio, bh);
+      if (c.slow > 0) {
+        g.lineStyle(1.5, 0x88ccff, 0.8);
+        g.strokeCircle(c.x, c.y - 6, 10);
+      }
+    }
+
+    // Tracer / chain projectiles
+    for (const proj of p.projectiles) {
+      if (proj.done) continue;
+      if (proj.chainPts) {
+        g.lineStyle(2.5, 0xfff2a0, Math.min(1, (proj.life ?? 0.15) * 8));
+        g.beginPath();
+        g.moveTo(proj.chainPts[0][0], proj.chainPts[0][1]);
+        for (let i = 1; i < proj.chainPts.length; i++) {
+          g.lineTo(proj.chainPts[i][0], proj.chainPts[i][1]);
+        }
+        g.strokePath();
+      } else if (proj.instant) {
+        g.lineStyle(1.5, proj.cn, Math.min(1, (proj.life ?? 0.08) * 10));
+        g.beginPath();
+        g.moveTo(proj.x, proj.y - CELL * 0.8);
+        g.lineTo(proj.tx, proj.ty);
+        g.strokePath();
+      }
+    }
+
+    // Circle particles (bursts)
     for (const pt of p.particles) {
       g.fillStyle(pt.color, Math.max(0, pt.life / pt.maxLife));
       g.fillCircle(pt.x, pt.y, pt.size);
     }
   }
 
-  _drawGrid(g, p, hover) {
-    const pathSet = new Set(p.path?.map(([r, c]) => r * COLS + c) ?? []);
-
-    for (let r = 0; r < ROWS; r++) {
-      for (let c = 0; c < COLS; c++) {
-        const x = p.offsetX + c * CELL, y = r * CELL;
-        const onPath = pathSet.has(r * COLS + c);
-        const checker = (r + c) % 2 === 0;
-        g.fillStyle(
-          onPath ? (checker ? 0x1c2e1c : 0x203424)
-                 : (checker ? 0x16162a : 0x181830),
-          1
-        );
-        g.fillRect(x, y, CELL, CELL);
-        g.lineStyle(1, 0x222236, 0.6);
-        g.strokeRect(x, y, CELL, CELL);
-      }
+  /** Tower-placement preview: sprite ghost + range ring + cell highlight. */
+  _drawGhost(g, p, hover) {
+    const def = gameState.placingTower;
+    const valid = def && hover &&
+      hover.row >= 0 && hover.row < ROWS && hover.col >= 0 && hover.col < COLS;
+    if (!valid) {
+      this._ghost.setVisible(false);
+      return;
     }
+    const { row, col } = hover;
+    const ok = canPlace(p, row, col) && p.gold >= def.cost;
+    const x = p.offsetX + col * CELL, y = row * CELL;
 
-    // Spawn / exit markers with a slow breathing glow
-    const pulse = 0.5 + Math.sin(this.time.now / 400) * 0.25;
-    g.fillStyle(0x00ff88, 1);
-    g.fillRect(p.offsetX + SPAWN_COL * CELL + 4, SPAWN_ROW * CELL + 4, CELL - 8, CELL - 8);
-    g.lineStyle(2, 0x00ff88, pulse);
-    g.strokeCircle(p.offsetX + SPAWN_COL * CELL + CELL / 2, SPAWN_ROW * CELL + CELL / 2, CELL * 0.7);
+    g.fillStyle(ok ? 0x50c850 : 0xc83c3c, 0.3);
+    g.fillRect(x, y, CELL, CELL);
+    g.lineStyle(1.5, ok ? 0x50c850 : 0xc83c3c, 0.5);
+    g.strokeCircle(x + CELL / 2, y + CELL / 2, def.range * CELL);
 
-    g.fillStyle(0xff4444, 1);
-    g.fillRect(p.offsetX + EXIT_COL * CELL + 4, EXIT_ROW * CELL + 4, CELL - 8, CELL - 8);
-    g.lineStyle(2, 0xff4444, pulse);
-    g.strokeCircle(p.offsetX + EXIT_COL * CELL + CELL / 2, EXIT_ROW * CELL + CELL / 2, CELL * 0.7);
-
-    // Placement preview (player board only)
-    if (!p.isAI && hover && gameState.placingTower) {
-      const { row, col } = hover;
-      if (row >= 0 && row < ROWS && col >= 0 && col < COLS) {
-        const ok = canPlace(p, row, col) && gameState.player.gold >= gameState.placingTower.cost;
-        g.fillStyle(ok ? 0x50c850 : 0xc83c3c, 0.25);
-        g.fillRect(p.offsetX + col * CELL, row * CELL, CELL, CELL);
-        g.lineStyle(1, ok ? 0x50c850 : 0xc83c3c, 0.4);
-        g.strokeCircle(
-          p.offsetX + col * CELL + CELL / 2,
-          row * CELL + CELL / 2,
-          gameState.placingTower.range * CELL
-        );
-      }
+    const spr = def.sprite;
+    if (spr && has(spr.key)) {
+      this._ghost
+        .setTexture(spr.key, 0)
+        .setOrigin(0.5, 0.94)
+        .setScale(spr.scales[0])
+        .setPosition(x + CELL / 2, y + CELL)
+        .setAlpha(0.6)
+        .setTint(ok ? 0xaaffaa : 0xff9999)
+        .setVisible(true);
+    } else {
+      this._ghost.setVisible(false);
     }
   }
 
-  _drawTower(g, p, t) {
-    const cx = p.offsetX + t.col * CELL + CELL / 2;
-    const cy = t.row * CELL + CELL / 2;
-    const r  = Math.min(CELL / 2 - 1, CELL / 2 - 3 + t.tier * 2); // grows per tier
-    const d  = t.def;
+  // ─── Procedural fallbacks (used only if a texture failed to load) ───────────
 
-    g.fillStyle(d.cn, 1);
+  _drawTowerFallback(g, cx, cy, t) {
+    const r = Math.min(CELL / 2 - 1, CELL / 2 - 3 + t.tier * 2);
+    g.fillStyle(t.def.cn, 1);
     g.lineStyle(1, 0xffffff, 1);
-
-    switch (d.shape) {
-      case 'circle':
-        g.fillCircle(cx, cy, r);
-        g.strokeCircle(cx, cy, r);
-        break;
-      case 'diamond':
-        g.beginPath();
-        g.moveTo(cx, cy - r); g.lineTo(cx + r, cy);
-        g.lineTo(cx, cy + r); g.lineTo(cx - r, cy);
-        g.closePath();
-        g.fillPath();
-        g.strokePath();
-        break;
-      default: // rect
-        g.fillRect(cx - r, cy - r, r * 2, r * 2);
-        g.strokeRect(cx - r, cy - r, r * 2, r * 2);
-    }
-
-    // Muzzle flash
-    if (t.flash > 0) {
-      g.fillStyle(0xffffcc, Math.min(0.7, t.flash * 8));
-      g.fillCircle(cx, cy, r + 3);
-    }
-
-    // Tier pips
-    for (let i = 0; i < t.tier; i++) {
-      g.fillStyle(0xffffff, 1);
-      g.fillCircle(cx - 4 + i * 8, cy + r - 3, 2);
-    }
-
-    // Highlight selected tower
-    const sel = gameState.selectedTower;
-    if (sel && sel.tower === t) {
-      g.lineStyle(2, 0xffd700, 1);   g.strokeCircle(cx, cy, CELL / 2 - 1);
-      g.lineStyle(1, 0xffd700, 0.25); g.strokeCircle(cx, cy, towerStats(t).range * CELL);
-    }
+    g.fillRect(cx - r, cy - r, r * 2, r * 2);
+    g.strokeRect(cx - r, cy - r, r * 2, r * 2);
   }
 
-  _drawCreep(g, c) {
-    const r = c.size;
-    // Walk wobble — small perpendicular sway along the heading
-    const wob = Math.sin(c.age * 12) * 1.4;
-    const x = c.x - c.hy * wob;
-    const y = c.y + c.hx * wob;
-
+  _drawCreepFallback(g, c) {
     g.fillStyle(c.cn, 1);
-    g.fillCircle(x, y, r);
-
-    // Facing nub
-    g.fillStyle(0xffffff, 0.85);
-    g.fillCircle(x + c.hx * (r - 1), y + c.hy * (r - 1), Math.max(1.5, r * 0.3));
-
-    // Hit flash
+    g.fillCircle(c.x, c.y, c.size);
     if (c.flash > 0) {
       g.fillStyle(0xffffff, Math.min(0.8, c.flash * 9));
-      g.fillCircle(x, y, r);
+      g.fillCircle(c.x, c.y, c.size);
     }
-
-    if (c.slow > 0) {
-      g.lineStyle(2, 0x88ccff, 1);
-      g.strokeCircle(x, y, r + 2);
-    }
-
-    // HP bar
-    const bw = r * 2 + 2, bh = 3;
-    const bx = x - bw / 2, by = y - r - 6;
-    g.fillStyle(0x333333, 1); g.fillRect(bx, by, bw, bh);
-    const ratio = c.hp / c.maxHp;
-    g.fillStyle(ratio > 0.5 ? 0x44ff44 : ratio > 0.25 ? 0xffaa00 : 0xff2222, 1);
-    g.fillRect(bx, by, bw * ratio, bh);
-  }
-
-  _drawProjectile(g, proj) {
-    if (proj.chainPts) {
-      // Chain bolt — polyline through every struck creep
-      g.lineStyle(2, proj.cn, Math.min(1, (proj.life ?? 0.15) * 8));
-      g.beginPath();
-      g.moveTo(proj.chainPts[0][0], proj.chainPts[0][1]);
-      for (let i = 1; i < proj.chainPts.length; i++) {
-        g.lineTo(proj.chainPts[i][0], proj.chainPts[i][1]);
-      }
-      g.strokePath();
-      return;
-    }
-    if (proj.instant) {
-      // Hitscan tracer — brief line from muzzle to target
-      g.lineStyle(1, proj.cn, Math.min(1, (proj.life ?? 0.08) * 10));
-      g.beginPath();
-      g.moveTo(proj.x, proj.y);
-      g.lineTo(proj.tx, proj.ty);
-      g.strokePath();
-      return;
-    }
-    g.fillStyle(proj.cn, 1);
-    g.fillCircle(proj.x, proj.y, 4);
-  }
-
-  _drawGutter(g) {
-    g.fillStyle(0x111111, 1);
-    g.fillRect(BOARD_W, 0, GUTTER, CANVAS_H);
-    g.lineStyle(1, 0x333333, 1);
-    g.beginPath(); g.moveTo(BOARD_W, 0);        g.lineTo(BOARD_W, CANVAS_H);        g.strokePath();
-    g.beginPath(); g.moveTo(BOARD_W + GUTTER, 0); g.lineTo(BOARD_W + GUTTER, CANVAS_H); g.strokePath();
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   /** Convert a Phaser pointer to a [row, col] on the PLAYER board. */
   _cellFromPtr(ptr) {
-    const x = ptr.x, y = ptr.y;
+    const x = ptr.worldX, y = ptr.worldY;   // camera is scrolled by WATER_PAD
     if (x < 0 || x >= BOARD_W || y < 0 || y >= BOARD_H) return null;
     return { row: Math.floor(y / CELL), col: Math.floor(x / CELL) };
   }
@@ -416,5 +435,10 @@ export class GameScene extends Phaser.Scene {
   }
 }
 
-// Tiny helper to avoid repeated getElementById
+// Tiny helpers to avoid repeated getElementById / redundant DOM writes
 const _el = id => document.getElementById(id);
+const _set = (id, val) => {
+  const el = _el(id);
+  const s = String(val);
+  if (el && el.textContent !== s) el.textContent = s;
+};

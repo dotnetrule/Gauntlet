@@ -18,6 +18,7 @@ export function spawnCreepFromDef(p, def) {
     speed:  def.speed,
     reward: def.reward,
     cn:     def.cn,
+    sprite: def.sprite ?? null,
     size:   def.size ?? 6,
     slow: 0, slowTimer: 0,
     flash: 0,

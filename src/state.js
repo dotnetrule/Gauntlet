@@ -70,13 +70,15 @@ export function addFloat(p, x, y, text, color) {
   if (!gameState.scene) return;
   const t = gameState.scene.add
     .text(x, y, text, {
-      fontSize:   '12px',
-      fontFamily: 'Courier New',
+      fontSize:   '13px',
+      fontFamily: 'Georgia, serif',
       color,
       fontStyle:  'bold',
+      stroke:     '#1a2433',
+      strokeThickness: 3,
     })
     .setOrigin(0.5)
-    .setDepth(20);
+    .setDepth(950);
   t._life = 1.2;
   t._vy   = -40;
   p.floats.push(t);

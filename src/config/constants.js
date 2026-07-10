@@ -4,11 +4,12 @@ export const ROWS    = 20;
 export const CELL    = 32;           // px per tile
 
 // ─── Derived dimensions ───────────────────────────────────────────────────────
-export const BOARD_W  = COLS * CELL; // 704
-export const BOARD_H  = ROWS * CELL; // 640
-export const GUTTER   = 24;          // gap between the two boards
-export const CANVAS_W = BOARD_W * 2 + GUTTER; // 1432
-export const CANVAS_H = BOARD_H;               // 640
+export const BOARD_W   = COLS * CELL; // 704
+export const BOARD_H   = ROWS * CELL; // 640
+export const GUTTER    = 64;          // water channel between the two boards
+export const WATER_PAD = 40;          // water margin around the boards
+export const CANVAS_W  = BOARD_W * 2 + GUTTER + WATER_PAD * 2; // 1552
+export const CANVAS_H  = BOARD_H + WATER_PAD * 2;              // 720
 
 // ─── Economy ──────────────────────────────────────────────────────────────────
 export const INCOME_INTERVAL = 15;   // seconds between income payouts
