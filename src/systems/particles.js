@@ -3,7 +3,7 @@
  * Leaf module: no game imports, operates on the per-player `particles` array.
  */
 
-const MAX_PARTICLES = 300;   // per player
+export const MAX_PARTICLES = 300;   // per player
 
 /**
  * Spawn a radial burst at (x, y).

@@ -1,5 +1,5 @@
 import { dealDamage } from './combat.js';
-import { burst } from '../systems/particles.js';
+import { burst, MAX_PARTICLES } from '../systems/particles.js';
 
 /**
  * Advance a projectile toward its target position.
@@ -38,5 +38,16 @@ export function updateProjectile(p, proj, dt) {
   } else {
     proj.x += (dx / dist) * step;
     proj.y += (dy / dist) * step;
+
+    // Sparse particle trail behind moving projectiles
+    proj.trailAcc = (proj.trailAcc ?? 0) + dt;
+    if (proj.trailAcc >= 0.03 && p.particles.length < MAX_PARTICLES) {
+      proj.trailAcc = 0;
+      p.particles.push({
+        x: proj.x, y: proj.y,
+        vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20,
+        life: 0.25, maxLife: 0.25, size: 1.5, color: proj.cn,
+      });
+    }
   }
 }

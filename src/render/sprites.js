@@ -65,10 +65,17 @@ export function syncPlayer(scene, p) {
       s.tdKind = 'tower';
       views.set(t, s);
     }
-    s.setScale(spr.scales[t.tier] ?? spr.scales[0]);
+    // Single scale write composing build rise, upgrade pop, and fire recoil
+    const buildMul  = 1 - (t.buildTime  ?? 0) / 0.35 * 0.4;
+    const popMul    = 1 + (t.upgradePop ?? 0) * 0.4;
+    const recoilMul = 1 + (t.flash      ?? 0) * 1.5;
+    s.setScale((spr.scales[t.tier] ?? spr.scales[0]) * buildMul * popMul * recoilMul);
     s.setDepth((t.row + 1) * CELL);
-    if (t.flash > 0 && !spr.tint) s.setTint(0xffffcc);
-    else if (!spr.tint)           s.clearTint();
+    // Tint precedence: upgrade white-hot pop > shot flash > permanent def tint
+    if ((t.upgradePop ?? 0) > 0.125)      s.setTintFill(0xfff2b0);
+    else if (t.flash > 0 && !spr.tint)    s.setTint(0xffffcc);
+    else if (spr.tint)                    s.setTint(spr.tint);
+    else                                  s.clearTint();
   }
 
   // Moving projectiles (tracers and chain bolts stay in the Graphics overlay)
@@ -124,6 +131,19 @@ export function sweep(scene, liveSets) {
       s.destroy();
     }
   }
+}
+
+/**
+ * Fire-and-forget effect sprite (e.g. construction dust). Rides the corpses
+ * array, which already handles the timed destroy.
+ */
+export function spawnFx(scene, key, anim, x, y, scale = 1, life = 0.5) {
+  if (!scene || !has(key)) return;
+  const s = scene.add.sprite(x, y, key).setScale(scale).setDepth(y + 1);
+  s.play(anim);
+  s.tdKind = 'fx';
+  s.life = life;
+  corpses.push(s);
 }
 
 export function updateCorpses(dt) {

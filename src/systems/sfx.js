@@ -93,6 +93,8 @@ const VOICES = {
   income:  () => tone(1320, 0.12, { type: 'sine', vol: 0.35 }),
   wave:    () => { tone(110, 0.4, { type: 'sawtooth', vol: 0.4 }); tone(165, 0.4, { type: 'sawtooth', vol: 0.3 }); },
   place:   () => tone(600, 0.05, { type: 'square', vol: 0.3, bend: 1.3 }),
+  click:   () => tone(950, 0.03, { type: 'square', vol: 0.15, bend: 0.9 }),
+  warn:    () => { tone(150, 0.3, { type: 'sawtooth', vol: 0.35 }); tone(120, 0.35, { type: 'sawtooth', vol: 0.3, delay: 0.18 }); },
   sell:    () => tone(400, 0.08, { type: 'square', vol: 0.3, bend: 0.5 }),
   upgrade: () => [523, 659, 784].forEach((f, i) => tone(f, 0.1, { type: 'square', vol: 0.3, delay: i * 0.06 })),
   win:     () => [523, 659, 784, 1046].forEach((f, i) => tone(f, 0.25, { type: 'square', vol: 0.35, delay: i * 0.12 })),

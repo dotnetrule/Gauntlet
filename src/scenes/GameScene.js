@@ -18,6 +18,9 @@ import { startWave, payIncome, processSpawnQueue } from '../systems/waves.js';
 import { updateAI } from '../systems/ai.js';
 import { updateParticles } from '../systems/particles.js';
 import { sfx } from '../systems/sfx.js';
+import { setStat, tickStats, snapStats } from '../render/hud.js';
+import { towerIconStyle } from '../render/icons.js';
+import { addFloat } from '../state.js';
 
 export class GameScene extends Phaser.Scene {
   constructor() {
@@ -114,6 +117,9 @@ export class GameScene extends Phaser.Scene {
       this._updateHUD();
     }
 
+    // HUD count animations run on real time, unaffected by game speed
+    tickStats(delta);
+
     this._render(dt);
   }
 
@@ -122,6 +128,12 @@ export class GameScene extends Phaser.Scene {
   resetGame() {
     clearAll();   // destroy entity sprites BEFORE the player objects are swapped
     initGame();
+    this._waveWarned = 0;
+    document.getElementById('wave-banner').classList.remove('incoming');
+    document.getElementById('overlay').classList.remove('show');
+    // Retarget the HUD to the fresh values, then snap so nothing counts down
+    this._updateHUD();
+    snapStats();
   }
 
   // ─── Logic tick ────────────────────────────────────────────────────────────
@@ -148,10 +160,31 @@ export class GameScene extends Phaser.Scene {
       p.projectiles = p.projectiles.filter(pr => !pr.done);
     }
 
+    // Wave-incoming telegraph: warn once per wave when spawn is 3s away
+    const banner = _el('wave-banner');
+    if (gameState.waveTimer <= 3) {
+      if (this._waveWarned !== gameState.waveNum) {
+        this._waveWarned = gameState.waveNum;
+        banner.classList.add('incoming');
+        sfx('warn');
+        for (const p of [gameState.player, gameState.ai]) {
+          addFloat(p, p.offsetX + SPAWN_COL * CELL + CELL / 2,
+                   SPAWN_ROW * CELL + CELL * 1.5,
+                   `Wave ${gameState.waveNum} incoming!`, '#ffb08a');
+        }
+      }
+    } else if (banner.classList.contains('incoming')) {
+      banner.classList.remove('incoming');
+    }
+
     // Consume one-shot feedback flags set by entity modules
     if (gameState.shake) {
       this.cameras.main.shake(150, 0.004);
       gameState.shake = false;
+    }
+    if (gameState.leakFlash) {
+      this.cameras.main.flash(120, 255, 40, 40);
+      gameState.leakFlash = false;
     }
     if (gameState.incomePulse) {
       gameState.incomePulse = false;
@@ -176,60 +209,94 @@ export class GameScene extends Phaser.Scene {
     document.getElementById('overlay-msg').textContent   = win
       ? `You reached wave ${gameState.waveNum - 1} and crushed the AI!`
       : `You fell on wave ${gameState.waveNum - 1}. Better luck next time!`;
-    document.getElementById('overlay').style.display = 'flex';
+    document.getElementById('overlay').classList.add('show');
   }
 
   // ─── HUD ───────────────────────────────────────────────────────────────────
 
   _updateHUD() {
     const { player, ai, waveNum, waveTimer, incomeTimer } = gameState;
-    _set('gold-val',   player.gold);
-    _set('income-val', player.income);
-    _set('lives-val',  player.lives);
-    _set('kills-val',  player.kills);
+    // Animated stats: hud.js is the ONLY writer for these elements
+    setStat('gold-val',   player.gold);
+    setStat('income-val', player.income);
+    setStat('lives-val',  player.lives);
+    setStat('kills-val',  player.kills);
+    setStat('sb-lives',  player.lives,  { flash: false });
+    setStat('sb-income', player.income, { flash: false });
+    setStat('sb-kills',  player.kills,  { flash: false });
+    setStat('sb-gold',   player.gold,   { flash: false });
+    setStat('ai-gold-val',   ai.gold,   { flash: false });
+    setStat('ai-income-val', ai.income, { flash: false });
+    setStat('ai-lives-val',  ai.lives,  { flash: false });
+    setStat('ai-kills-val',  ai.kills,  { flash: false });
+    // Non-animated labels/timers
     _set('income-timer', Math.ceil(incomeTimer));
-    _set('sb-lives',  player.lives);
-    _set('sb-income', player.income);
-    _set('sb-kills',  player.kills);
-    _set('sb-gold',   player.gold);
-    _set('ai-gold-val',   ai.gold);
-    _set('ai-income-val', ai.income);
-    _set('ai-lives-val',  ai.lives);
-    _set('ai-kills-val',  ai.kills);
     _set('wave-timer', Math.ceil(waveTimer));
     _set('wave-label', `Wave ${waveNum}`);
 
-    this._updateSendLocks();
+    this._updateCmdButtons();
     this._updateTowerButtons();
     this._updatePortrait();
   }
 
-  /** Portrait box: selected tower stats, the def being placed, or idle text. */
+  /** Portrait box: selected tower stats (with upgrade preview), the def being
+   *  placed, or idle text. Also swaps the avatar for the tower's icon. */
   _updatePortrait() {
     const sel = gameState.selectedTower;
     const placing = gameState.placingTower;
 
-    let name, stats;
+    // A stat line, optionally with a green "→ next" delta when upgrading
+    const delta = (label, cur, next, suffix = '') =>
+      next !== undefined && next !== cur
+        ? `${label}: ${cur} <span class="up">→ ${next}</span>${suffix}`
+        : `${label}: ${cur}${suffix}`;
+
+    let name, statsHTML, iconKey = null;
     if (sel) {
       const t = sel.tower, s = towerStats(t);
-      name  = `${t.def.name} Tower${t.tier > 0 ? ` (Tier ${t.tier + 1})` : ''}`;
-      stats = [
-        `Damage: ${s.damage}   Rate: ${s.rate}/s`,
-        `Range: ${s.range} tiles`,
-        s.slow  ? `Slows ${(s.slow * 100).toFixed(0)}%` : '',
-        s.splash ? `Splash: ${s.splash} tiles` : '',
-        s.chain ? `Chains to ${s.chain}` : '',
-        sel.p !== gameState.player ? '(enemy tower)' : '',
+      const up = sel.p === gameState.player ? nextUpgrade(t) : null;
+      const n  = up ? { ...s, ...up } : {};
+      name    = `${t.def.name} Tower${t.tier > 0 ? ` (Tier ${t.tier + 1})` : ''}`;
+      iconKey = t.def.sprite?.key;
+      statsHTML = [
+        `${delta('Damage', s.damage, n.damage)}   ${delta('Rate', s.rate, n.rate, '/s')}`,
+        delta('Range', s.range, n.range, ' tiles'),
+        s.slow   ? delta('Slow', `${(s.slow * 100).toFixed(0)}%`, n.slow !== undefined ? `${(n.slow * 100).toFixed(0)}%` : undefined) : '',
+        s.splash ? delta('Splash', s.splash, n.splash, ' tiles') : '',
+        s.chain  ? delta('Chains to', s.chain, n.chain) : '',
+        up ? `<span class="${gameState.player.gold >= up.cost ? 'up' : 'dim'}">Next tier: ${up.cost}g</span>` : '',
+        sel.p !== gameState.player ? '<span class="dim">(enemy tower)</span>' : '',
       ].filter(Boolean).join('\n');
     } else if (placing) {
-      name  = `Build: ${placing.name}`;
-      stats = `${placing.desc}\nCost: ${placing.cost}g — click the grid to place`;
+      name      = `Build: ${placing.name}`;
+      iconKey   = placing.sprite?.key;
+      statsHTML = `${placing.desc}\nCost: ${placing.cost}g — click the grid to place`;
     } else {
-      name  = 'Commander';
-      stats = 'Select a tower or pick one to build.\nSend units to grow your income.';
+      name      = 'Commander';
+      statsHTML = 'Select a tower or pick one to build.\nSend units to grow your income.';
     }
     _set('portrait-name', name);
-    _set('portrait-stats', stats);
+
+    // innerHTML write, change-guarded (content is config-derived, no user input)
+    const statsEl = _el('portrait-stats');
+    if (this._lastStatsHTML !== statsHTML) {
+      this._lastStatsHTML = statsHTML;
+      statsEl.innerHTML = statsHTML;
+    }
+
+    // Swap avatar ↔ tower icon
+    if (this._lastIconKey !== iconKey) {
+      this._lastIconKey = iconKey;
+      const icon = _el('portrait-icon'), img = _el('portrait-img');
+      if (iconKey) {
+        icon.style.cssText = towerIconStyle(iconKey, 68, 68);
+        icon.style.display = 'block';
+        img.style.display  = 'none';
+      } else {
+        icon.style.display = 'none';
+        img.style.display  = '';
+      }
+    }
   }
 
   /** Refresh Upgrade/Sell button labels for the selected tower (DOM writes only on change). */
@@ -256,13 +323,29 @@ export class GameScene extends Phaser.Scene {
     if (sellBtn.textContent !== sellLabel) sellBtn.textContent = sellLabel;
   }
 
-  /** Grey out send buttons whose unlock wave hasn't been reached yet. */
-  _updateSendLocks() {
-    for (const btn of document.querySelectorAll('.send-btn')) {
-      const locked = gameState.waveNum < Number(btn.dataset.unlock);
-      if (btn.disabled !== locked) {
-        btn.disabled = locked;
+  /**
+   * Live lock/afford states on all command buttons. Class-based (never the
+   * disabled attribute — disabled elements don't fire mouseover, which would
+   * kill tooltips). Click handlers in ui.js enforce the actual rules.
+   */
+  _updateCmdButtons() {
+    const gold = gameState.player.gold;
+    for (const btn of document.querySelectorAll('.cmd-btn')) {
+      const locked = btn.dataset.unlock
+        ? gameState.waveNum < Number(btn.dataset.unlock)
+        : false;
+      if (btn.classList.contains('locked') !== locked) {
         btn.classList.toggle('locked', locked);
+        if (!locked && btn.dataset.unlock) {
+          // One-shot unlock glow
+          btn.classList.remove('just-unlocked');
+          void btn.offsetWidth;
+          btn.classList.add('just-unlocked');
+        }
+      }
+      const broke = !locked && gold < Number(btn.dataset.cost);
+      if (btn.classList.contains('cant-afford') !== broke) {
+        btn.classList.toggle('cant-afford', broke);
       }
     }
   }
@@ -285,12 +368,38 @@ export class GameScene extends Phaser.Scene {
       this._drawMarkers(g, p);
       this._drawOverlay(g, p);
     }
+    this._drawHover(g, gameState.player, this._hover);
     this._drawGhost(g, gameState.player, this._hover);
+  }
+
+  /** Pre-click affordance: highlight hovered towers/cells, manage the cursor. */
+  _drawHover(g, p, hover) {
+    let cursor = 'default';
+    if (gameState.placingTower) {
+      cursor = 'crosshair';   // ghost handles the visuals while placing
+    } else if (hover && !gameState.gameOver) {
+      const tower = p.towers.find(t => t.row === hover.row && t.col === hover.col);
+      const x = p.offsetX + hover.col * CELL, y = hover.row * CELL;
+      if (tower) {
+        cursor = 'pointer';
+        g.lineStyle(2, 0xffd700, 0.35);
+        g.strokeCircle(x + CELL / 2, y + CELL / 2, CELL / 2 + 2);
+      } else {
+        g.lineStyle(1, 0xffffff, 0.08);
+        g.strokeRect(x + 0.5, y + 0.5, CELL - 1, CELL - 1);
+      }
+    }
+    if (this._cursor !== cursor) {
+      this._cursor = cursor;
+      this.input.setDefaultCursor(cursor);
+    }
   }
 
   /** Spawn/exit pulses (subtle — the den/castle sprites carry the visual). */
   _drawMarkers(g, p) {
-    const pulse = 0.35 + Math.sin(this.time.now / 400) * 0.15;
+    // Pulse faster and brighter while a wave is about to spawn
+    const urgency = gameState.waveTimer <= 3 ? 1 + (3 - gameState.waveTimer) : 1;
+    const pulse = Math.min(1, (0.35 + Math.sin(this.time.now / (400 / urgency)) * 0.15) * urgency);
     g.lineStyle(2, 0x66ff99, pulse);
     g.strokeCircle(p.offsetX + SPAWN_COL * CELL + CELL / 2, SPAWN_ROW * CELL + CELL / 2, CELL * 0.7);
     g.lineStyle(2, 0xff6655, pulse);
@@ -354,7 +463,14 @@ export class GameScene extends Phaser.Scene {
         }
         g.strokePath();
       } else if (proj.instant) {
-        g.lineStyle(1.5, proj.cn, Math.min(1, (proj.life ?? 0.08) * 10));
+        // Wide faint pass under the thin bright one — cheap tracer glow
+        const a = Math.min(1, (proj.life ?? 0.08) * 10);
+        g.lineStyle(4, proj.cn, a * 0.3);
+        g.beginPath();
+        g.moveTo(proj.x, proj.y - CELL * 0.8);
+        g.lineTo(proj.tx, proj.ty);
+        g.strokePath();
+        g.lineStyle(1.5, proj.cn, a);
         g.beginPath();
         g.moveTo(proj.x, proj.y - CELL * 0.8);
         g.lineTo(proj.tx, proj.ty);

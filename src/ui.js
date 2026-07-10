@@ -9,6 +9,7 @@ import { sellTower, upgradeTower } from './entities/tower.js';
 import { sendUnit }   from './systems/waves.js';
 import { BOARD_W }    from './config/constants.js';
 import { unitIconStyle, towerIconStyle } from './render/icons.js';
+import { sfx } from './systems/sfx.js';
 
 export function setupUI(phaserGame) {
   _buildTowerButtons();
@@ -18,6 +19,19 @@ export function setupUI(phaserGame) {
   _buildSpeedButton();
   _buildRestartButton(phaserGame);
   _buildTooltip();
+  _buildClickSfx();
+}
+
+const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/** Structured parchment tooltip HTML: bold header, body lines, gold cost, italic hint. */
+function tooltipHTML({ head, cost, lines, hint }) {
+  return [
+    `<span class="tt-head">${esc(head)}</span>`,
+    cost ? `<span class="tt-cost">Cost: ${esc(cost)}</span><br>` : '',
+    lines.filter(Boolean).map(esc).join('<br>'),
+    hint ? `<span class="tt-hint">${esc(hint)}</span>` : '',
+  ].join('');
 }
 
 // ─── Tower buttons ────────────────────────────────────────────────────────────
@@ -28,21 +42,24 @@ function _buildTowerButtons() {
     const btn = document.createElement('button');
     btn.className    = 'cmd-btn tower-btn';
     btn.dataset.id   = def.id;
+    btn.dataset.cost = def.cost;
     btn.innerHTML    = `
       <div class="cmd-icon" style="${towerIconStyle(def.sprite?.key, 44, 44)}"></div>
       <div class="cmd-name">${def.name}</div>
       <div class="cmd-cost">${def.cost}g</div>`;
-    btn.title = [
-      `${def.name} — ${def.desc}`,
-      `Cost: ${def.cost}g | Sell: 50% of invested`,
-      `Range: ${def.range} tiles | Dmg: ${def.damage} | Rate: ${def.rate}/s`,
-      def.slow   ? `Slow: ${(def.slow * 100).toFixed(0)}%` : '',
-      def.splash  ? `Splash radius: ${def.splash} tiles`   : '',
-      def.chain   ? `Chains to ${def.chain} creeps`        : '',
-      def.upgrades ? `Upgrades: ${def.upgrades.map(u => `${u.cost}g`).join(' → ')}` : '',
-      '',
-      'Click grid to place. Shift+click to keep placing.',
-    ].filter(Boolean).join('\n');
+    btn.dataset.tt = tooltipHTML({
+      head: `${def.name} Tower`,
+      cost: `${def.cost}g (sells for 50%)`,
+      lines: [
+        def.desc,
+        `Range: ${def.range} tiles | Dmg: ${def.damage} | Rate: ${def.rate}/s`,
+        def.slow    ? `Slow: ${(def.slow * 100).toFixed(0)}%` : '',
+        def.splash  ? `Splash radius: ${def.splash} tiles`    : '',
+        def.chain   ? `Chains to ${def.chain} creeps`         : '',
+        def.upgrades ? `Upgrades: ${def.upgrades.map(u => `${u.cost}g`).join(' → ')}` : '',
+      ],
+      hint: 'Click grid to place. Shift+click to keep placing.',
+    });
 
     btn.addEventListener('click', () => {
       if (gameState.placingTower === def) {
@@ -69,20 +86,25 @@ function _buildSendButtons() {
     const btn = document.createElement('button');
     btn.className = 'cmd-btn send-btn';
     btn.dataset.unlock = def.unlockWave;
+    btn.dataset.cost   = def.cost;
     btn.innerHTML = `
       <div class="cmd-icon" style="${unitIconStyle(def.sprite?.key, 'Red', 44)}"></div>
       <div class="cmd-name">${def.name}${def.count ? ` ×${def.count}` : ''}</div>
       <div class="cmd-cost">${def.cost}g</div>
       <div class="cmd-badge">+${def.incomeBonus}</div>
       <div class="cmd-lock"></div>`;
-    btn.title = [
-      `Send ${def.name} into the opponent's lane`,
-      def.desc,
-      `Cost: ${def.cost}g | HP: ${def.hp} | Speed: ${def.speed}`,
-      `Permanently raises YOUR income by ${def.incomeBonus}`,
-      def.count ? `Sends ${def.count} units at once` : '',
-      def.unlockWave > 1 ? `Unlocks at wave ${def.unlockWave}` : '',
-    ].filter(Boolean).join('\n');
+    btn.dataset.tt = tooltipHTML({
+      head: `Send ${def.name}`,
+      cost: `${def.cost}g`,
+      lines: [
+        def.desc,
+        `HP: ${def.hp} | Speed: ${def.speed}`,
+        `Permanently raises YOUR income by ${def.incomeBonus}`,
+        def.count ? `Sends ${def.count} units at once` : '',
+        def.unlockWave > 1 ? `Unlocks at wave ${def.unlockWave}` : '',
+      ],
+      hint: "Marches down the opponent's lane.",
+    });
 
     btn.addEventListener('click', () => {
       if (!gameState.player || gameState.gameOver) return;
@@ -122,16 +144,28 @@ function _buildUpgradeButton() {
 }
 
 // ─── Speed button ─────────────────────────────────────────────────────────────
+const SPEED_GLYPHS = { 1: '▶', 2: '▶▶', 3: '▶▶▶' };
+
+function setSpeedButton(speed) {
+  const btn = document.getElementById('speed-btn');
+  btn.textContent = `${SPEED_GLYPHS[speed]} ${speed}x`;
+  btn.className = `wc3-btn speed-${speed}`;
+}
+
 function _buildSpeedButton() {
   const speeds = [1, 2, 3];
   let idx = 0;
-  const btn = document.getElementById('speed-btn');
-  btn.addEventListener('click', () => {
+  setSpeedButton(speeds[idx]);
+  document.getElementById('speed-btn').addEventListener('click', () => {
     idx = (idx + 1) % speeds.length;
-    gameState.gameSpeed     = speeds[idx];
-    btn.textContent = `Speed: ${speeds[idx]}x`;
+    gameState.gameSpeed = speeds[idx];
+    setSpeedButton(speeds[idx]);
   });
+
+  // Restart resets gameSpeed to 1 — keep the button in sync
+  _resetSpeedIdx = () => { idx = 0; setSpeedButton(1); };
 }
+let _resetSpeedIdx = () => {};
 
 // ─── Restart button ───────────────────────────────────────────────────────────
 function _buildRestartButton(phaserGame) {
@@ -141,28 +175,43 @@ function _buildRestartButton(phaserGame) {
     gameState.selectedTower = null;
     gameState.gameSpeed     = 1;
     document.querySelectorAll('.tower-btn').forEach(b => b.classList.remove('selected'));
-    document.getElementById('speed-btn').textContent = 'Speed: 1x';
+    _resetSpeedIdx();
+    document.getElementById('overlay').classList.remove('show');
+    document.getElementById('wave-banner').classList.remove('incoming');
 
-    // Reset game via the scene
+    // Reset game via the scene (also re-syncs and snaps the HUD)
     phaserGame.scene.getScene('GameScene').resetGame();
   });
 }
 
+// ─── Click feedback sound ─────────────────────────────────────────────────────
+function _buildClickSfx() {
+  document.addEventListener('pointerdown', e => {
+    if (e.target.closest('.cmd-btn, .wc3-btn')) sfx('click');
+  }, { passive: true });
+}
+
 // ─── Tooltip ──────────────────────────────────────────────────────────────────
+// Content lives in data-tt (not title — the native browser tooltip would
+// double up, and [disabled] elements wouldn't fire mouseover anyway).
 function _buildTooltip() {
   const tooltip = document.getElementById('tooltip');
   document.addEventListener('mouseover', e => {
-    const el = e.target.closest('[title]');
+    const el = e.target.closest('[data-tt]');
     if (!el) return;
-    tooltip.textContent = el.title;
-    tooltip.style.display = 'block';
+    tooltip.innerHTML = el.dataset.tt;
+    tooltip.classList.add('show');
   });
   document.addEventListener('mousemove', e => {
+    if (!tooltip.classList.contains('show')) return;
     const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
     tooltip.style.left = `${Math.min(e.clientX + 14, window.innerWidth  - w - 8)}px`;
     tooltip.style.top  = `${Math.min(e.clientY - 8,  window.innerHeight - h - 8)}px`;
   });
   document.addEventListener('mouseout', e => {
-    if (!e.target.closest('[title]')) tooltip.style.display = 'none';
+    const from = e.target.closest?.('[data-tt]');
+    if (!from) return;
+    // Hide only when the pointer actually left the tooltipped element
+    if (e.relatedTarget?.closest?.('[data-tt]') !== from) tooltip.classList.remove('show');
   });
 }

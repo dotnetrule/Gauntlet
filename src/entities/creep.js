@@ -1,7 +1,7 @@
 import { gameState, addFloat } from '../state.js';
 import { computePath } from '../systems/pathfinding.js';
 import { sfx } from '../systems/sfx.js';
-import { burst } from '../systems/particles.js';
+import { burst, MAX_PARTICLES } from '../systems/particles.js';
 import { CELL, EXIT_COL, EXIT_ROW, SPAWN_COL, SPAWN_ROW } from '../config/constants.js';
 
 /**
@@ -53,8 +53,20 @@ export function updateCreep(p, c, dt) {
     p.lives   = Math.max(0, p.lives - 1);
     addFloat(p, ex, EXIT_ROW * CELL, '-1 ❤️', '#ff4444');
     burst(p, ex, ey, 0xff4444, 14, { speed: 110, life: 0.5 });
+    // Second, upward-biased burst rising off the castle
+    for (let i = 0; i < 10; i++) {
+      if (p.particles.length >= MAX_PARTICLES) break;
+      p.particles.push({
+        x: ex + (Math.random() - 0.5) * CELL, y: ey,
+        vx: (Math.random() - 0.5) * 60, vy: -60 - Math.random() * 90,
+        life: 0.6, maxLife: 0.6, size: 3, color: 0xff7755,
+      });
+    }
     sfx('leak');
-    if (!p.isAI) gameState.shake = true;   // only shake for the player's pain
+    if (!p.isAI) {                         // only punish the player's screen
+      gameState.shake     = true;
+      gameState.leakFlash = true;
+    }
     return;
   }
 
