@@ -1,4 +1,5 @@
-import { gameState } from '../state.js';
+import { gameState, addFloat } from '../state.js';
+import { spawnFx } from '../render/sprites.js';
 import { astar, computePath } from '../systems/pathfinding.js';
 import { dealDamage } from './combat.js';
 import { sfx } from '../systems/sfx.js';
@@ -27,9 +28,17 @@ export function placeTower(p, row, col, def) {
   if (!canPlace(p, row, col) || p.gold < def.cost) return false;
   p.gold          -= def.cost;
   p.grid[row][col] = 1;
-  p.towers.push({ row, col, def, tier: 0, invested: def.cost, cooldown: 0, flash: 0 });
+  p.towers.push({
+    row, col, def, tier: 0, invested: def.cost,
+    cooldown: 0, flash: 0,
+    buildTime: 0.35, upgradePop: 0,   // construction rise / upgrade pop timers
+  });
   p.path = computePath(p.grid);
   p.creeps.forEach(c => rerouteCreep(p, c));
+  const cx = p.offsetX + col * CELL + CELL / 2;
+  const cy = (row + 1) * CELL;
+  burst(p, cx, cy - CELL / 2, 0xcfd8e8, 10, { speed: 60, life: 0.4 });
+  spawnFx(gameState.scene, 'dust', 'dust-anim', cx, cy, 0.9, 0.45);
   sfx('place');
   return true;
 }
@@ -48,12 +57,15 @@ export function nextUpgrade(t) {
 export function upgradeTower(p, t) {
   const up = nextUpgrade(t);
   if (!up || p.gold < up.cost) return false;
-  p.gold     -= up.cost;
-  t.tier     += 1;
-  t.invested += up.cost;
+  p.gold       -= up.cost;
+  t.tier       += 1;
+  t.invested   += up.cost;
+  t.upgradePop  = 0.25;
   const cx = p.offsetX + t.col * CELL + CELL / 2;
   const cy = t.row * CELL + CELL / 2;
   burst(p, cx, cy, 0xffd700, 12, { speed: 70, life: 0.5 });
+  spawnFx(gameState.scene, 'dust', 'dust-anim', cx, cy + CELL / 2, 0.9, 0.45);
+  addFloat(p, cx, cy - CELL, `Tier ${t.tier + 1}!`, '#ffd700');
   sfx('upgrade');
   return true;
 }
@@ -72,8 +84,10 @@ export function sellTower(p, tower) {
 
 /** Fire at the furthest-along creep in range, respecting cooldown. */
 export function updateTower(p, t, dt) {
-  t.cooldown = Math.max(0, t.cooldown - dt);
-  t.flash    = Math.max(0, t.flash - dt);
+  t.cooldown   = Math.max(0, t.cooldown - dt);
+  t.flash      = Math.max(0, t.flash - dt);
+  t.buildTime  = Math.max(0, (t.buildTime ?? 0) - dt);
+  t.upgradePop = Math.max(0, (t.upgradePop ?? 0) - dt);
   if (t.cooldown > 0) return;
 
   const stats = towerStats(t);
