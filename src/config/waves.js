@@ -4,9 +4,9 @@
  * so tiers cap at Ogre and rewards are modest.
  */
 const WAVE_TIERS = [
-  { hp:  80,  speed: 55, reward: 3, cn: 0x88ff88, name: 'Footman' },
-  { hp: 220,  speed: 50, reward: 5, cn: 0xffaa44, name: 'Grunt'   },
-  { hp: 550,  speed: 45, reward: 8, cn: 0xff6644, name: 'Ogre'    },
+  { hp:  80,  speed: 55, reward: 3, cn: 0x88ff88, name: 'Footman', sprite: { key: 'pawn',    scale: 0.30 } },
+  { hp: 220,  speed: 50, reward: 5, cn: 0xffaa44, name: 'Grunt',   sprite: { key: 'torch',   scale: 0.34 } },
+  { hp: 550,  speed: 45, reward: 8, cn: 0xff6644, name: 'Ogre',    sprite: { key: 'warrior', scale: 0.38 } },
 ];
 
 /**

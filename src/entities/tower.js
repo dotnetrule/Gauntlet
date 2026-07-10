@@ -111,7 +111,7 @@ export function updateTower(p, t, dt) {
       x: tx, y: ty, tx: best.x, ty: best.y,
       speed: 280, splash: stats.splash * CELL,
       damage: stats.damage, slow: stats.slow,
-      cn: stats.cn, done: false,
+      cn: stats.cn, done: false, pid: t.def.id,
     });
   } else {
     // Instant hit — fire a visual-only tracer

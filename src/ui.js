@@ -8,6 +8,7 @@ import { SEND_UNITS } from './config/units.js';
 import { sellTower, upgradeTower } from './entities/tower.js';
 import { sendUnit }   from './systems/waves.js';
 import { BOARD_W }    from './config/constants.js';
+import { unitIconStyle, towerIconStyle } from './render/icons.js';
 
 export function setupUI(phaserGame) {
   _buildTowerButtons();
@@ -25,12 +26,12 @@ function _buildTowerButtons() {
 
   Object.values(TOWERS).forEach(def => {
     const btn = document.createElement('button');
-    btn.className    = 'btn tower-btn';
+    btn.className    = 'cmd-btn tower-btn';
     btn.dataset.id   = def.id;
     btn.innerHTML    = `
-      <div class="tb-name">${def.name}</div>
-      <div class="tb-cost">💰${def.cost}</div>
-      <div class="tb-desc">${def.desc}</div>`;
+      <div class="cmd-icon" style="${towerIconStyle(def.sprite?.key, 44, 44)}"></div>
+      <div class="cmd-name">${def.name}</div>
+      <div class="cmd-cost">${def.cost}g</div>`;
     btn.title = [
       `${def.name} — ${def.desc}`,
       `Cost: ${def.cost}g | Sell: 50% of invested`,
@@ -66,13 +67,14 @@ function _buildSendButtons() {
 
   Object.values(SEND_UNITS).forEach(def => {
     const btn = document.createElement('button');
-    btn.className = 'btn send-btn';
+    btn.className = 'cmd-btn send-btn';
     btn.dataset.unlock = def.unlockWave;
     btn.innerHTML = `
-      <div class="sb-name">${def.name}</div>
-      <div class="sb-cost">💰${def.cost}</div>
-      <div class="sb-income">+${def.incomeBonus} income</div>
-      <div class="sb-hp">❤️${def.hp}${def.count ? ` ×${def.count}` : ''}</div>`;
+      <div class="cmd-icon" style="${unitIconStyle(def.sprite?.key, 'Red', 44)}"></div>
+      <div class="cmd-name">${def.name}${def.count ? ` ×${def.count}` : ''}</div>
+      <div class="cmd-cost">${def.cost}g</div>
+      <div class="cmd-badge">+${def.incomeBonus}</div>
+      <div class="cmd-lock"></div>`;
     btn.title = [
       `Send ${def.name} into the opponent's lane`,
       def.desc,
@@ -156,8 +158,9 @@ function _buildTooltip() {
     tooltip.style.display = 'block';
   });
   document.addEventListener('mousemove', e => {
-    tooltip.style.left = `${e.clientX + 14}px`;
-    tooltip.style.top  = `${e.clientY - 8}px`;
+    const w = tooltip.offsetWidth, h = tooltip.offsetHeight;
+    tooltip.style.left = `${Math.min(e.clientX + 14, window.innerWidth  - w - 8)}px`;
+    tooltip.style.top  = `${Math.min(e.clientY - 8,  window.innerHeight - h - 8)}px`;
   });
   document.addEventListener('mouseout', e => {
     if (!e.target.closest('[title]')) tooltip.style.display = 'none';
